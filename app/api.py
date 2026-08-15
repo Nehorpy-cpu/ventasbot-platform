@@ -34,6 +34,8 @@ from .models import (
     Payment,
     PaymentMethodConfig,
     PaymentStatus,
+    Invoice,
+    InvoiceStatus,
     Product,
     Role,
     Tenant,
@@ -59,6 +61,8 @@ from .schemas import (
     CheckoutOutput,
     CatalogImportInput,
     CatalogImportOutput,
+    InvoiceIssueInput,
+    InvoiceOutput,
     ProductCreate,
     ProductOutput,
     StatusChange,
@@ -371,6 +375,34 @@ def order_list(tenant_id: str, actor: User = Depends(current_user), db: Session 
     assert_tenant_access(db, actor, tenant_id)
     return db.scalars(select(Order).options(selectinload(Order.items)).where(
         Order.tenant_id == tenant_id).order_by(Order.created_at.desc())).all()
+
+
+@router.get("/tenants/{tenant_id}/invoices", response_model=list[InvoiceOutput])
+def invoice_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
+    return db.scalars(select(Invoice).where(
+        Invoice.tenant_id == tenant_id).order_by(Invoice.created_at.desc())).all()
+
+
+@router.post("/tenants/{tenant_id}/invoices/{invoice_id}/issue", response_model=InvoiceOutput)
+def invoice_issue(tenant_id: str, invoice_id: str, payload: InvoiceIssueInput,
+                  actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER})
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.tenant_id == tenant_id))
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Factura no encontrada")
+    if invoice.status != InvoiceStatus.PENDING:
+        raise HTTPException(status_code=409, detail="La factura ya fue procesada")
+    invoice.status = InvoiceStatus.ISSUED
+    invoice.document_number = payload.document_number
+    invoice.external_id = payload.external_id
+    invoice.kude_url = payload.kude_url
+    invoice.issued_at = utcnow()
+    audit(db, user=actor, tenant_id=tenant_id, action="invoice.issued", entity_type="invoice",
+          entity_id=invoice.id, details={"document_number": payload.document_number})
+    db.commit()
+    db.refresh(invoice)
+    return invoice
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/status", response_model=OrderOutput)

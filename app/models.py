@@ -60,6 +60,12 @@ class PaymentStatus(str, enum.Enum):
     REFUNDED = "REFUNDED"
 
 
+class InvoiceStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    ISSUED = "ISSUED"
+    CANCELLED = "CANCELLED"
+
+
 class DeliveryStatus(str, enum.Enum):
     PENDING = "PENDING"
     ASSIGNED = "ASSIGNED"
@@ -262,6 +268,26 @@ class PaymentMethodConfig(Base):
     branch_code: Mapped[str] = mapped_column(String(40), default="")
     return_url: Mapped[str] = mapped_column(String(500), default="")
     cancel_url: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("inv"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    status: Mapped[InvoiceStatus] = mapped_column(Enum(InvoiceStatus), default=InvoiceStatus.PENDING)
+    customer_name: Mapped[str] = mapped_column(String(160), default="Consumidor final")
+    tax_id: Mapped[str] = mapped_column(String(32), default="")
+    email: Mapped[str] = mapped_column(String(254), default="")
+    amount: Mapped[int] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(40), default="SIFEN")
+    document_number: Mapped[str] = mapped_column(String(80), default="")
+    external_id: Mapped[str] = mapped_column(String(160), default="")
+    kude_url: Mapped[str] = mapped_column(String(500), default="")
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

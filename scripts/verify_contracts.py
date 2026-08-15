@@ -27,7 +27,7 @@ def main() -> None:
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
     tenant_models = ["Product", "Customer", "WhatsappIntegration", "Conversation", "ConversationMessage",
-                     "Order", "Payment", "PaymentMethodConfig", "Delivery", "DeliveryEvent"]
+                     "Order", "Payment", "PaymentMethodConfig", "Invoice", "Delivery", "DeliveryEvent"]
     for index, name in enumerate(tenant_models):
         start = models.index(f"class {name}(")
         later = [models.find(f"class {other}(", start + 1) for other in tenant_models[index + 1:]]

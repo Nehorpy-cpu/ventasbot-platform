@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import ConversationStatus, DeliveryStatus, MessageDirection, OrderStatus, PaymentStatus, Role, TenantStatus
+from .models import ConversationStatus, DeliveryStatus, InvoiceStatus, MessageDirection, OrderStatus, PaymentStatus, Role, TenantStatus
 
 
 class ORMModel(BaseModel):
@@ -169,6 +169,27 @@ class PaymentOutput(ORMModel):
     amount: int
     external_id: str | None
     checkout_url: str | None = None
+
+
+class InvoiceIssueInput(BaseModel):
+    document_number: str = Field(min_length=1, max_length=80)
+    external_id: str = Field(default="", max_length=160)
+    kude_url: str = Field(default="", max_length=500, pattern=r"^https://|^$")
+
+
+class InvoiceOutput(ORMModel):
+    id: str
+    tenant_id: str
+    order_id: str
+    status: InvoiceStatus
+    customer_name: str
+    tax_id: str
+    email: str
+    amount: int
+    provider: str
+    document_number: str
+    external_id: str
+    kude_url: str
 
 
 class PaymentMethodConfigInput(BaseModel):

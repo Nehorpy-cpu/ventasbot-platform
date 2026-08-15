@@ -12,6 +12,7 @@ SaaS multiempresa propio para vender, cobrar, preparar y entregar pedidos inicia
 - Carrito de catálogo → ubicación → horario → pago → depósito.
 - Pago al recibir, transferencia y adaptador configurable Bancard Tpago.
 - Preparación, delivery, aviso por WhatsApp y tracking con timeline.
+- Factura pendiente automática al confirmar; emisión y referencias KUDE/SIFEN por empresa.
 - Panel responsive y datos demo reproducibles.
 
 ## Arquitectura

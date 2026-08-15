@@ -16,6 +16,7 @@ from .models import (
     Delivery,
     DeliveryEvent,
     DeliveryStatus,
+    Invoice,
     Order,
     OrderItem,
     OrderStatus,
@@ -187,6 +188,12 @@ def change_order_status(db: Session, order: Order, target: OrderStatus, actor: U
                 raise HTTPException(status_code=409, detail=f"Stock cambió para {item.product_name}")
         for item in order.items:
             products[item.product_id].stock -= item.quantity
+        if not db.scalar(select(Invoice).where(Invoice.order_id == order.id)):
+            customer = db.get(Customer, order.customer_id)
+            db.add(Invoice(tenant_id=order.tenant_id, order_id=order.id,
+                           customer_name=(customer.name if customer and customer.name else "Consumidor final"),
+                           tax_id=(customer.tax_id if customer and customer.tax_id else ""),
+                           email=(customer.email if customer and customer.email else ""), amount=order.total))
     if target == OrderStatus.CANCELLED and previous in {
         OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY,
         OrderStatus.ASSIGNED, OrderStatus.IN_TRANSIT,

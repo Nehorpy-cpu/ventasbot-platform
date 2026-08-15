@@ -353,3 +353,7 @@ def test_callback_bancard_confirma_pago_autoritativo(platform):
     assert callback.status_code == 200
     assert client.get(f"/api/tenants/{tenant_id}/orders", headers=owner).json()[0]["status"] == "CONFIRMED"
     assert client.get(f"/api/tenants/{tenant_id}/products", headers=owner).json()[0]["stock"] == 1
+    invoices = client.get(f"/api/tenants/{tenant_id}/invoices", headers=owner)
+    assert invoices.status_code == 200
+    assert invoices.json()[0]["amount"] == 25000
+    assert invoices.json()[0]["status"] == "PENDING"
