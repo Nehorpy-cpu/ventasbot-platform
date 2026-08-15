@@ -50,6 +50,14 @@ El seed demo carga de forma idempotente clientes, conversaciones, cinco pedidos 
 
 En producción el contenedor ejecuta `alembic upgrade head` antes de iniciar. Para crear futuras revisiones: `alembic revision --autogenerate -m "descripcion"`; revisá el SQL generado antes de aplicarlo.
 
+Para el entorno ya preparado de este repositorio se incluye un arranque reproducible que aplica migraciones antes de iniciar:
+
+```powershell
+.\scripts\start_local.ps1 -Port 8000
+```
+
+En otra terminal podés comprobar API y panel con `.\scripts\verify_local.ps1 -Port 8000`. La política de modelos y actualización continua está documentada en [AI_UPDATE_POLICY.md](docs/AI_UPDATE_POLICY.md).
+
 ## WhatsApp y secretos
 
 Producción usa `/webhooks/meta`. Configurá cada empresa en `PUT /api/tenants/{id}/integrations/whatsapp`; `access_token_env` contiene solo el nombre de una variable del servidor. En Meta cargá la URL HTTPS, `VERIFY_TOKEN`, `APP_SECRET` y la suscripción `messages`. `/webhook` queda solo para compatibilidad del prototipo inicial y no debe usarse en una cuenta productiva.
