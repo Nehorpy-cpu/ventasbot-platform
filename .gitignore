@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+githudapi.env
+githubapi.env
+*.pem
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.db
+*.sqlite
+*.sqlite3
+.python*/
+.runtime-deps/
+.git-codex/
