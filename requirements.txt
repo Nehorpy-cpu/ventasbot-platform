@@ -7,3 +7,4 @@ PyJWT>=2.9
 pwdlib[argon2]>=0.2
 python-multipart>=0.0.9
 psycopg[binary]>=3.2
+alembic>=1.14

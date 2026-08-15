@@ -4,6 +4,7 @@ services:
     ports: ["8099:8099"]
     env_file: .env
     environment:
+      APP_ENV: production
       DATABASE_URL: postgresql+psycopg://ventasbot:ventasbot@db:5432/ventasbot
     depends_on:
       db: {condition: service_healthy}

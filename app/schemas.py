@@ -74,6 +74,20 @@ class ProductOutput(ProductCreate, ORMModel):
     tenant_id: str
 
 
+class CatalogImportInput(BaseModel):
+    source: str = Field(pattern=r"^(META|WEB|WHATSAPP_BUSINESS|CSV|API)$")
+    products: list[ProductCreate] = Field(min_length=1, max_length=5000)
+    deactivate_missing: bool = False
+
+
+class CatalogImportOutput(BaseModel):
+    source: str
+    created: int
+    updated: int
+    deactivated: int
+    total_received: int
+
+
 class CustomerInput(BaseModel):
     phone: str = Field(min_length=8, max_length=32)
     name: str = ""

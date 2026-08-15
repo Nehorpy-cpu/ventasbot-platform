@@ -89,6 +89,26 @@ def test_panel_web_se_sirve(platform):
     assert "/panel/app.js" in response.text
 
 
+def test_importacion_catalogo_es_idempotente_y_desactiva_faltantes(platform):
+    client, _ = platform
+    root = auth(client, "root@ventasbot.test", "super-segura-123")
+    tenant = create_tenant(client, root, slug="catalog-sync", email="owner@catalog.test")
+    owner = auth(client, "owner@catalog.test", "owner-segura-123", "catalog-sync")
+    url = f"/api/tenants/{tenant['id']}/catalog/import"
+    first = client.post(url, headers=owner, json={"source": "META", "products": [
+        {"sku": "A", "name": "A", "price": 1000, "stock": 3},
+        {"sku": "B", "name": "B", "price": 2000, "stock": 4}
+    ]})
+    assert first.status_code == 200 and first.json()["created"] == 2
+    second = client.post(url, headers=owner, json={"source": "WEB", "deactivate_missing": True,
+        "products": [{"sku": "A", "name": "A nuevo", "price": 1500, "stock": 5}]})
+    assert second.status_code == 200
+    assert second.json() == {"source": "WEB", "created": 0, "updated": 1,
+                             "deactivated": 1, "total_received": 1}
+    rows = client.get(f"/api/tenants/{tenant['id']}/products", headers=owner).json()
+    assert {row["sku"]: row["active"] for row in rows} == {"A": True, "B": False}
+
+
 def test_login_empresarial_exige_slug(platform):
     client, _ = platform
     root = auth(client, "root@ventasbot.test", "super-segura-123")

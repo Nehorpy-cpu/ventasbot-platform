@@ -6,6 +6,7 @@ SaaS multiempresa propio para vender, cobrar, preparar y entregar pedidos inicia
 
 - Login por empresa y superadministración de empresas/demo.
 - Catálogo, stock, clientes, pedidos, auditoría y aislamiento por `tenant_id`.
+- Importación idempotente de catálogo desde Meta, web, WhatsApp Business, CSV o API.
 - CRM bot/humano, asignación y mensajes salientes.
 - Webhooks Meta firmados e idempotentes.
 - Carrito de catálogo → ubicación → horario → pago → depósito.
@@ -44,6 +45,8 @@ Copy-Item .env.example .env
 
 Definí `JWT_SECRET`, `SUPERADMIN_PASSWORD` y, para el comercio demo, `SEED_DEMO=1` y `DEMO_PASSWORD`. Panel: `http://localhost:8099/panel/`. OpenAPI: `http://localhost:8099/docs`.
 
+En producción el contenedor ejecuta `alembic upgrade head` antes de iniciar. Para crear futuras revisiones: `alembic revision --autogenerate -m "descripcion"`; revisá el SQL generado antes de aplicarlo.
+
 ## WhatsApp y secretos
 
 Producción usa `/webhooks/meta`. Configurá cada empresa en `PUT /api/tenants/{id}/integrations/whatsapp`; `access_token_env` contiene solo el nombre de una variable del servidor. En Meta cargá la URL HTTPS, `VERIFY_TOKEN`, `APP_SECRET` y la suscripción `messages`. `/webhook` queda solo para compatibilidad del prototipo inicial y no debe usarse en una cuenta productiva.
@@ -56,6 +59,7 @@ Los métodos se habilitan por empresa en `/api/tenants/{id}/payment-methods/{cod
 
 ```powershell
 .venv\Scripts\python.exe -m pytest -q
+python scripts/verify_contracts.py
 node --check app/static/app.js
 ```
 

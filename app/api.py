@@ -57,6 +57,8 @@ from .schemas import (
     PaymentMethodConfigOutput,
     CheckoutInput,
     CheckoutOutput,
+    CatalogImportInput,
+    CatalogImportOutput,
     ProductCreate,
     ProductOutput,
     StatusChange,
@@ -145,7 +147,7 @@ def user_create(tenant_id: str, payload: UserCreate, actor: User = Depends(curre
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER})
     if payload.role in {Role.PLATFORM_ADMIN, Role.TENANT_OWNER} and actor.role != Role.PLATFORM_ADMIN:
         raise HTTPException(status_code=403, detail="No puede crear ese rol")
-    user = User(tenant_id=tenant_id, email=payload.email.strip().lower(), name=payload.name,
+    user = User(tenant_id=tenant_id, email=payload.email.strip().lower(), name=payload.name, phone=payload.phone,
                 password_hash=hash_password(payload.password), role=payload.role)
     db.add(user)
     audit(db, user=actor, tenant_id=tenant_id, action="user.created", entity_type="user", entity_id=user.id,
@@ -157,6 +159,14 @@ def user_create(tenant_id: str, payload: UserCreate, actor: User = Depends(curre
         raise HTTPException(status_code=409, detail="Email ya utilizado en la empresa") from exc
     db.refresh(user)
     return user
+
+
+@router.get("/tenants/{tenant_id}/users", response_model=list[UserOutput])
+def user_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id)
+    return db.scalars(select(User).where(
+        User.tenant_id == tenant_id, User.active.is_(True)
+    ).order_by(User.name)).all()
 
 
 @router.get("/tenants/{tenant_id}/products", response_model=list[ProductOutput])
@@ -178,6 +188,46 @@ def product_create(tenant_id: str, payload: ProductCreate, actor: User = Depends
         raise HTTPException(status_code=409, detail="SKU ya utilizado") from exc
     db.refresh(product)
     return product
+
+
+@router.post("/tenants/{tenant_id}/catalog/import", response_model=CatalogImportOutput)
+def catalog_import(tenant_id: str, payload: CatalogImportInput,
+                   actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Contrato común para conectores Meta, web, CSV o WhatsApp Business."""
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.WAREHOUSE})
+    incoming = {item.sku: item for item in payload.products}
+    if len(incoming) != len(payload.products):
+        raise HTTPException(status_code=400, detail="El lote contiene SKU duplicados")
+    existing = db.scalars(select(Product).where(
+        Product.tenant_id == tenant_id, Product.sku.in_(incoming)
+    ).with_for_update()).all()
+    by_sku = {product.sku: product for product in existing}
+    created = updated = deactivated = 0
+    for sku, item in incoming.items():
+        values = item.model_dump()
+        product = by_sku.get(sku)
+        if product:
+            for key, value in values.items():
+                setattr(product, key, value)
+            updated += 1
+        else:
+            db.add(Product(tenant_id=tenant_id, **values))
+            created += 1
+    if payload.deactivate_missing:
+        missing = db.scalars(select(Product).where(
+            Product.tenant_id == tenant_id,
+            Product.sku.not_in(incoming),
+            Product.active.is_(True),
+        ).with_for_update()).all()
+        for product in missing:
+            product.active = False
+            deactivated += 1
+    audit(db, user=actor, tenant_id=tenant_id, action="catalog.imported", entity_type="catalog",
+          entity_id=None, details={"source": payload.source, "created": created,
+                                  "updated": updated, "deactivated": deactivated})
+    db.commit()
+    return CatalogImportOutput(source=payload.source, created=created, updated=updated,
+                               deactivated=deactivated, total_received=len(payload.products))
 
 
 @router.get("/tenants/{tenant_id}/integrations/whatsapp", response_model=WhatsappIntegrationOutput | None)
@@ -545,7 +595,9 @@ def public_tracking(tracking_token: str, response: Response, db: Session = Depen
     delivery = db.scalar(select(Delivery).where(Delivery.tracking_token == tracking_token))
     if not delivery:
         raise HTTPException(status_code=404, detail="Tracking no encontrado")
-    if delivery.tracking_expires_at < utcnow():
+    expires_at = delivery.tracking_expires_at
+    now = utcnow() if expires_at.tzinfo else utcnow().replace(tzinfo=None)
+    if expires_at < now:
         raise HTTPException(status_code=410, detail="El enlace de tracking expiró")
     order = db.get(Order, delivery.order_id)
     events = db.scalars(select(DeliveryEvent).where(

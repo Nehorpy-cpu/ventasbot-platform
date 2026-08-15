@@ -15,13 +15,14 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from .config import cargar
 from .mensajes import MensajeEntrante, enviar_texto, extraer_mensajes
 from .security import firma_valida
 from .api import router as api_router
 from .auth import validate_security_config
-from .database import create_schema
+from .database import SessionLocal, create_schema
 from .meta_webhook import router as meta_webhook_router
 from .payment_webhook import router as payment_webhook_router
 
@@ -31,7 +32,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     validate_security_config()
-    create_schema()
+    if os.getenv("APP_ENV", "development").lower() not in {"prod", "production"}:
+        create_schema()
     yield
 
 
@@ -50,8 +52,15 @@ if static_dir.exists():
 
 @app.get("/salud")
 def salud() -> dict[str, object]:
-    faltan = cfg.faltantes()
-    return {"ok": not faltan, "faltan": faltan, "graph": cfg.graph_version}
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+        database_ok = True
+    except Exception:
+        database_ok = False
+    faltan = cfg.faltantes() if legacy_webhook_enabled else []
+    return {"ok": database_ok and not faltan, "database": database_ok,
+            "legacy_faltan": faltan, "graph": cfg.graph_version}
 
 
 @app.get("/webhook", response_class=PlainTextResponse)
