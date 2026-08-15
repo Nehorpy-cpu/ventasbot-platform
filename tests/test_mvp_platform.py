@@ -185,15 +185,20 @@ def test_venta_pago_stock_delivery_y_tracking(platform):
     payment_response = client.post(
         f"/api/tenants/{tenant_id}/orders/{order['id']}/payments",
         headers=owner,
-        json={
-            "provider": "BANCARD",
-            "status": "APPROVED",
-            "amount": 185000,
-            "external_id": "bancard-process-1",
+            json={
+                "provider": "BANCARD",
+                "status": "PENDING",
+                "amount": 185000,
+                "external_id": "bancard-process-1",
             "idempotency_key": "pay-order-demo-0001"
         },
     )
     assert payment_response.status_code == 201, payment_response.text
+    callback = client.post(f"/webhooks/payments/bancard/{tenant_id}", json={"payment": {
+        "link_alias": "bancard-process-1", "status": "confirmed",
+        "response_code": "00", "amount": 185000,
+    }})
+    assert callback.status_code == 200, callback.text
 
     orders = client.get(f"/api/tenants/{tenant_id}/orders", headers=owner).json()
     assert orders[0]["status"] == "CONFIRMED"
