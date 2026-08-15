@@ -1,67 +1,69 @@
-# Webhook de WhatsApp Cloud API
+# VentasBot Platform
 
-Endpoint para recibir y responder mensajes de WhatsApp por la **Cloud API oficial de
-Meta**. FastAPI + httpx. Sin librerías no oficiales.
+SaaS multiempresa propio para vender, cobrar, preparar y entregar pedidos iniciados en WhatsApp. Usa la API oficial de WhatsApp Cloud de Meta y mantiene cada secreto fuera de la base de datos.
 
-## Arrancar en local
+## Funcionalidad actual
 
-```bash
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-copy .env.example .env
+- Login por empresa y superadministración de empresas/demo.
+- Catálogo, stock, clientes, pedidos, auditoría y aislamiento por `tenant_id`.
+- Importación idempotente de catálogo desde Meta, web, WhatsApp Business, CSV o API.
+- CRM bot/humano, asignación y mensajes salientes.
+- Webhooks Meta firmados e idempotentes.
+- Carrito de catálogo → ubicación → horario → pago → depósito.
+- Pago al recibir, transferencia y adaptador configurable Bancard Tpago.
+- Preparación, delivery, aviso por WhatsApp y tracking con timeline.
+- Factura pendiente automática al confirmar; emisión y referencias KUDE/SIFEN por empresa.
+- Panel responsive y datos demo reproducibles.
+
+## Arquitectura
+
+Monolito modular FastAPI + SQLAlchemy, preparado para PostgreSQL. Permite validar el negocio y separar workers, tracking o facturación cuando el volumen lo justifique.
+
+```mermaid
+flowchart LR
+  WA["Cliente en WhatsApp"] --> META["WhatsApp Cloud API"]
+  META --> HOOK["Webhook firmado"]
+  HOOK --> CRM["CRM + bot"]
+  CRM --> CAT["Catálogo / stock"]
+  CRM --> ORD["Pedidos"]
+  ORD --> PAY["Bancard / transferencia / contra entrega"]
+  ORD --> DEP["Depósito"]
+  DEP --> DRV["WhatsApp delivery"]
+  DRV --> TRK["Tracking"]
 ```
 
-Completar `.env` y levantar:
+VendeyaPy, MetaBots, CrediPower, Arfagi y Company360 sirvieron como referencias de dominio, seguridad y operación; esta plataforma consolida contratos y código propios.
 
-```bash
+## Inicio local
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+.venv\Scripts\python.exe -m app.seed
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8099
 ```
 
-Chequeo rápido de configuración: `GET http://127.0.0.1:8099/salud` — lista qué
-variables faltan.
+Definí `JWT_SECRET`, `SUPERADMIN_PASSWORD` y, para el comercio demo, `SEED_DEMO=1` y `DEMO_PASSWORD`. Panel: `http://localhost:8099/panel/`. OpenAPI: `http://localhost:8099/docs`.
+
+En producción el contenedor ejecuta `alembic upgrade head` antes de iniciar. Para crear futuras revisiones: `alembic revision --autogenerate -m "descripcion"`; revisá el SQL generado antes de aplicarlo.
+
+## WhatsApp y secretos
+
+Producción usa `/webhooks/meta`. Configurá cada empresa en `PUT /api/tenants/{id}/integrations/whatsapp`; `access_token_env` contiene solo el nombre de una variable del servidor. En Meta cargá la URL HTTPS, `VERIFY_TOKEN`, `APP_SECRET` y la suscripción `messages`. `/webhook` queda solo para compatibilidad del prototipo inicial y no debe usarse en una cuenta productiva.
+
+## Pagos
+
+Los métodos se habilitan por empresa en `/api/tenants/{id}/payment-methods/{code}`. El adaptador `BANCARD` usa la API oficial Tpago para generar un enlace compartible en WhatsApp; referencia variables para claves y códigos de comercio/sucursal. Los datos de tarjeta se ingresan en el checkout del adquirente, nunca en VentasBot. “Sin salir de WhatsApp” significa abrir ese checkout en el navegador integrado. La confirmación cifrada del callback y homologación final requieren sandbox y credenciales comerciales de Bancard.
 
 ## Pruebas
 
-```bash
+```powershell
 .venv\Scripts\python.exe -m pytest -q
+python scripts/verify_contracts.py
+node --check app/static/app.js
 ```
 
-17 tests: handshake, validación de firma, parseo del payload y normalización del
-número. Para probar contra un servidor levantado de verdad:
+Cubren firma/handshake Meta, texto/ubicación/carrito, login, aislamiento, pedido/pago/stock, idempotencia, conversación y estados de delivery.
 
-```bash
-.venv\Scripts\python.exe smoke.py http://127.0.0.1:8099
-```
-
-## Qué hace
-
-| Ruta | Qué hace |
-|---|---|
-| `GET /webhook` | Handshake de Meta: devuelve `hub.challenge` en texto plano si el `hub.verify_token` coincide. |
-| `POST /webhook` | Valida `X-Hub-Signature-256`, encola el procesamiento y responde 200 al toque. |
-| `GET /salud` | Reporta qué variables de entorno faltan. |
-
-La lógica del bot está en `procesar()` en [app/main.py](app/main.py) — hoy es un eco.
-Ahí se enchufa la IA o lo que corresponda.
-
-## Detalles que rompen si se hacen mal
-
-- El challenge se devuelve **crudo en texto plano**. Como JSON queda entre comillas y
-  Meta rechaza la verificación.
-- Los parámetros llegan como `hub.mode` / `hub.verify_token` / `hub.challenge`, con
-  punto: en FastAPI hay que declararlos con `Query(alias=...)` o da 422.
-- La firma se calcula sobre los **bytes crudos** del cuerpo, nunca sobre el JSON
-  re-serializado (hay un test que lo demuestra).
-- El mismo webhook recibe acuses de entrega en `statuses`. Si no se filtran, cada
-  mensaje propio vuelve como entrante y el bot se responde a sí mismo.
-- Se responde 200 rápido y el trabajo va a background: Meta reintenta si tardás, y los
-  reintentos duplican mensajes.
-- `enviar_texto` solo sirve dentro de la ventana de 24 h. Fuera de ella, plantilla
-  aprobada.
-
-## Desplegar
-
-Necesita HTTPS público (Cloudflare Tunnel/Workers, Railway, Vercel…). Después, en la
-consola de Meta: cargar la URL y el `VERIFY_TOKEN`, **suscribirse al campo `messages`**,
-publicar la app, y reemplazar el token temporal por uno permanente de usuario del
-sistema. El procedimiento completo está en el skill `whatsapp-cloud-api`.
+Antes de un piloto: PostgreSQL, migraciones, HTTPS, backups, secret manager, rate limiting, cola durable, homologación Bancard y módulo SIFEN. Ver [roadmap](docs/ROADMAP.md) y [seguridad](docs/SECURITY.md).

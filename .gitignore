@@ -7,5 +7,12 @@ githubapi.env
 __pycache__/
 *.py[cod]
 .venv/
+.venv-clean/
 venv/
 .pytest_cache/
+*.db
+*.sqlite
+*.sqlite3
+.python*/
+.runtime-deps/
+.git-codex/

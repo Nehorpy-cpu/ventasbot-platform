@@ -18,6 +18,8 @@ class MensajeEntrante:
     texto: str       # vacio si el tipo no es text
     timestamp: str
     nombre: str      # nombre de perfil, si vino
+    datos: dict[str, Any]
+    phone_number_id: str = ""
 
 
 def extraer_mensajes(payload: dict[str, Any]) -> list[MensajeEntrante]:
@@ -32,6 +34,7 @@ def extraer_mensajes(payload: dict[str, Any]) -> list[MensajeEntrante]:
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
             value = change.get("value") or {}
+            phone_number_id = str((value.get("metadata") or {}).get("phone_number_id") or "")
 
             nombres = {
                 c.get("wa_id"): (c.get("profile") or {}).get("name", "")
@@ -40,14 +43,25 @@ def extraer_mensajes(payload: dict[str, Any]) -> list[MensajeEntrante]:
 
             for m in value.get("messages") or []:
                 tipo = m.get("type", "")
+                datos = m.get(tipo) or {}
+                texto = ""
+                if tipo == "text":
+                    texto = datos.get("body", "")
+                elif tipo == "interactive":
+                    seleccion = datos.get("button_reply") or datos.get("list_reply") or {}
+                    texto = seleccion.get("title") or seleccion.get("id", "")
+                elif tipo == "button":
+                    texto = datos.get("text", "")
                 salida.append(
                     MensajeEntrante(
                         id=m.get("id", ""),
                         de=m.get("from", ""),
                         tipo=tipo,
-                        texto=(m.get("text") or {}).get("body", "") if tipo == "text" else "",
+                        texto=texto,
                         timestamp=m.get("timestamp", ""),
                         nombre=nombres.get(m.get("from", ""), ""),
+                        datos=datos,
+                        phone_number_id=phone_number_id,
                     )
                 )
 

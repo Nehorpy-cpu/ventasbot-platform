@@ -48,6 +48,7 @@ PAYLOAD_TEXTO = {
                     "field": "messages",
                     "value": {
                         "messaging_product": "whatsapp",
+                        "metadata": {"phone_number_id": "123456789"},
                         "contacts": [{"wa_id": "595981123456", "profile": {"name": "Ana"}}],
                         "messages": [
                             {
@@ -147,6 +148,7 @@ def test_firma_sobre_json_reserializado_no_coincide():
 def test_extrae_el_mensaje_de_texto_con_nombre_de_perfil():
     (m,) = extraer_mensajes(PAYLOAD_TEXTO)
     assert (m.de, m.tipo, m.texto, m.nombre) == ("595981123456", "text", "hola bot", "Ana")
+    assert m.phone_number_id == "123456789"
 
 
 def test_los_acuses_de_entrega_no_son_mensajes():
@@ -171,6 +173,22 @@ def test_mensaje_no_texto_no_pierde_el_remitente():
     }
     (m,) = extraer_mensajes(payload)
     assert (m.tipo, m.texto, m.de) == ("image", "", "595981123456")
+
+
+def test_extrae_ubicacion_y_pedido_de_catalogo():
+    payload = json.loads(json.dumps(PAYLOAD_TEXTO))
+    messages = payload["entry"][0]["changes"][0]["value"]["messages"]
+    messages[:] = [
+        {"id": "wamid.LOC", "from": "595981123456", "timestamp": "1", "type": "location",
+         "location": {"latitude": -25.3, "longitude": -57.6, "name": "Casa"}},
+        {"id": "wamid.ORDER", "from": "595981123456", "timestamp": "2", "type": "order",
+         "order": {"catalog_id": "cat-1", "product_items": [
+             {"product_retailer_id": "PIZZA-FAM", "quantity": "2", "item_price": "85000"}
+         ]}},
+    ]
+    location, order = extraer_mensajes(payload)
+    assert location.datos["latitude"] == -25.3
+    assert order.datos["product_items"][0]["product_retailer_id"] == "PIZZA-FAM"
 
 
 # --- envío -----------------------------------------------------------------
