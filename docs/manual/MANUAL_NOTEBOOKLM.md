@@ -119,7 +119,20 @@ Secuencia de tracking:
 
 La ubicación y el contacto del cliente solo deben compartirse con el delivery asignado y durante el tiempo necesario para cumplir el pedido.
 
-## 10. Configuración e integraciones
+## 10. Agente comercial
+
+Esta pantalla configura el playbook independiente de cada empresa y muestra las respuestas que esperan revisión.
+
+- **Borrador con aprobación:** el bot califica al lead y propone una respuesta; un vendedor puede editarla, aprobarla o rechazarla.
+- **Automático por confianza:** sólo envía respuestas cuando la confianza alcanza el umbral definido.
+- **Temperatura y puntaje:** clasifica cada oportunidad como COLD, WARM o HOT y registra intención, urgencia y presupuesto estimado.
+- **Objeciones:** cada línea contiene un nombre, frases disparadoras y una respuesta previamente aprobada por la empresa.
+- **Escalamiento:** palabras sensibles como reclamo, denuncia o humano detienen el bot y transfieren la conversación.
+- **Auditoría:** cada ejecución conserva intención, decisión, confianza y los pasos realizados.
+
+El agente nunca confirma pagos ni cambia stock, facturas o estados de pedidos. Esas operaciones permanecen en los servicios transaccionales de la plataforma.
+
+## 11. Configuración e integraciones
 
 Configuración reúne las conexiones propias de cada empresa.
 
@@ -134,7 +147,7 @@ Componentes principales:
 
 Las claves privadas nunca deben escribirse en mensajes, documentación o código. Se guardan como variables de entorno.
 
-## 11. Roles
+## 12. Roles
 
 - **PLATFORM_ADMIN:** administra empresas y demos de toda la plataforma.
 - **TENANT_OWNER:** controla su empresa, usuarios e integraciones.
@@ -144,18 +157,20 @@ Las claves privadas nunca deben escribirse en mensajes, documentación o código
 - **DISPATCHER:** asigna y supervisa entregas.
 - **DRIVER:** actualiza el recorrido del pedido asignado.
 
-## 12. Recorrido de prueba recomendado
+## 13. Recorrido de prueba recomendado
 
 1. Iniciar sesión como Pizzería Demo.
 2. Revisar Resumen y confirmar cinco pedidos.
 3. Abrir Conversaciones y comparar un chat BOT con uno CLOSED.
 4. Abrir Pedidos y localizar los cinco estados de ejemplo.
-5. Marcar el pedido PREPARING como READY.
-6. Abrir Facturación y distinguir PENDING, ISSUED y CANCELLED.
-7. Abrir Entregas y avanzar la entrega IN_TRANSIT a ARRIVED.
-8. Revisar Configuración sin colocar todavía credenciales reales.
+5. Abrir Agente comercial, revisar el modo borrador y guardar una objeción de prueba.
+6. Aprobar o rechazar una sugerencia si aparece en la bandeja.
+7. Marcar el pedido PREPARING como READY.
+8. Abrir Facturación y distinguir PENDING, ISSUED y CANCELLED.
+9. Abrir Entregas y avanzar la entrega IN_TRANSIT a ARRIVED.
+10. Revisar Configuración sin colocar todavía credenciales reales.
 
-## 13. Reiniciar o completar la demo
+## 14. Reiniciar o completar la demo
 
 Desde PowerShell, dentro del proyecto:
 
@@ -166,7 +181,7 @@ Desde PowerShell, dentro del proyecto:
 
 El seed puede ejecutarse nuevamente sin duplicar el historial. Si se desea una base completamente nueva, debe hacerse una copia de seguridad antes de eliminar la base local.
 
-## 14. Uso en Google NotebookLM
+## 15. Uso en Google NotebookLM
 
 1. Abrir NotebookLM y crear un cuaderno nuevo.
 2. Elegir **Añadir fuente**.
@@ -182,10 +197,9 @@ Prompts útiles:
 - “Prepará preguntas frecuentes para capacitar a una empresa nueva”.
 - “Indicá qué funciones son demo y cuáles requieren credenciales u homologación”.
 
-## 15. Límites de la demostración
+## 16. Límites de la demostración
 
 - Meta no envía ni recibe mensajes reales sin credenciales verificadas.
 - Bancard no procesa dinero real sin comercio habilitado y ambiente homologado.
 - SIFEN no emite documentos tributarios reales sin homologación y certificados.
 - La base SQLite es adecuada para prueba local; producción debe usar PostgreSQL, HTTPS, backups y monitoreo.
-

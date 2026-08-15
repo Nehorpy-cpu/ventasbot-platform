@@ -380,3 +380,75 @@ def test_callback_bancard_confirma_pago_autoritativo(platform):
     assert invoices.status_code == 200
     assert invoices.json()[0]["amount"] == 25000
     assert invoices.json()[0]["status"] == "PENDING"
+
+
+def test_agente_comercial_borrador_aprueba_y_audita(platform):
+    client, TestingSession = platform
+    root = auth(client, "root@ventasbot.test", "super-segura-123")
+    tenant = create_tenant(client, root, slug="agente-draft", email="owner@agent.test")
+    owner = auth(client, "owner@agent.test", "owner-segura-123", "agente-draft")
+    tenant_id = tenant["id"]
+    configured = client.put(f"/api/tenants/{tenant_id}/sales/playbook", headers=owner, json={
+        "enabled": True, "mode": "DRAFT", "brand_tone": "Breve",
+        "hot_threshold": 70, "warm_threshold": 40, "auto_send_min_confidence": 90,
+        "escalation_words": ["humano", "reclamo"],
+        "objections": [{"name": "PRECIO", "triggers": ["muy caro"],
+                         "response": "Podemos buscar una opción acorde a tu presupuesto.", "active": True}],
+    })
+    assert configured.status_code == 200, configured.text
+    with TestingSession() as db:
+        customer = Customer(tenant_id=tenant_id, phone="595981777777", name="Lead caliente")
+        db.add(customer)
+        db.flush()
+        conversation = get_or_create_conversation(db, tenant_id, customer.id)
+        reply = bot_reply(db, conversation, MensajeEntrante(
+            id="agent-1", de=customer.phone, tipo="text", texto="Es muy caro, necesito para hoy",
+            timestamp="1", nombre=customer.name, datos={}, phone_number_id="demo"))
+        assert reply is None
+        assert conversation.bot_state == "WAITING_AGENT_APPROVAL"
+        db.commit()
+    pending = client.get(f"/api/tenants/{tenant_id}/sales/pending", headers=owner)
+    assert pending.status_code == 200 and len(pending.json()) == 1
+    item = pending.json()[0]
+    assert item["intent"] == "HANDLE_OBJECTION" and item["lead_score"] >= 70
+    approved = client.post(
+        f"/api/tenants/{tenant_id}/sales/pending/{item['id']}/approve", headers=owner,
+        json={"text": "Respuesta revisada y aprobada.", "note": "Prueba E2E"})
+    assert approved.status_code == 200, approved.text
+    repeated = client.post(
+        f"/api/tenants/{tenant_id}/sales/pending/{item['id']}/approve", headers=owner,
+        json={"note": "duplicado"})
+    assert repeated.status_code == 409
+    assert client.get(f"/api/tenants/{tenant_id}/sales/pending", headers=owner).json() == []
+    messages = client.get(
+        f"/api/tenants/{tenant_id}/conversations/{item['conversation_id']}/messages", headers=owner).json()
+    assert messages[-1]["text"] == "Respuesta revisada y aprobada."
+
+
+def test_agente_automatico_y_escalamiento_humano(platform):
+    client, TestingSession = platform
+    root = auth(client, "root@ventasbot.test", "super-segura-123")
+    tenant = create_tenant(client, root, slug="agente-auto", email="owner@auto.test")
+    owner = auth(client, "owner@auto.test", "owner-segura-123", "agente-auto")
+    tenant_id = tenant["id"]
+    client.put(f"/api/tenants/{tenant_id}/sales/playbook", headers=owner, json={
+        "enabled": True, "mode": "AUTOMATIC", "brand_tone": "Breve",
+        "hot_threshold": 70, "warm_threshold": 40, "auto_send_min_confidence": 90,
+        "escalation_words": ["abogado"],
+        "objections": [{"name": "CONFIANZA", "triggers": ["no confio"],
+                         "response": "Tu compra queda registrada y protegida.", "active": True}],
+    })
+    with TestingSession() as db:
+        customer = Customer(tenant_id=tenant_id, phone="595982777777", name="Lead")
+        db.add(customer)
+        db.flush()
+        conversation = get_or_create_conversation(db, tenant_id, customer.id)
+        objection = bot_reply(db, conversation, MensajeEntrante(
+            id="auto-1", de=customer.phone, tipo="text", texto="No confío en esto",
+            timestamp="1", nombre="Lead", datos={}, phone_number_id="demo"))
+        assert objection == "Tu compra queda registrada y protegida."
+        escalated = bot_reply(db, conversation, MensajeEntrante(
+            id="auto-2", de=customer.phone, tipo="text", texto="Voy a hablar con mi abogado",
+            timestamp="2", nombre="Lead", datos={}, phone_number_id="demo"))
+        assert "persona" in escalated
+        assert conversation.status.value == "HUMAN"

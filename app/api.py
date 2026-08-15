@@ -25,6 +25,12 @@ from .models import (
     ConversationMessage,
     ConversationStatus,
     Customer,
+    AgentRun,
+    AgentRunStatus,
+    PendingAgentAction,
+    PendingActionStatus,
+    SalesObjection,
+    SalesPlaybook,
     Delivery,
     DeliveryEvent,
     DeliveryStatus,
@@ -73,7 +79,11 @@ from .schemas import (
     UserOutput,
     WhatsappIntegrationInput,
     WhatsappIntegrationOutput,
+    SalesPlaybookInput,
+    SalesPlaybookOutput,
+    PendingActionResolveInput,
 )
+from .sales_agent import default_playbook, split_terms
 from .payment_gateway import create_bancard_checkout
 from .services import (
     ALLOWED_DELIVERY_TRANSITIONS,
@@ -88,6 +98,23 @@ from .services import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+def _playbook_output(db: Session, playbook: SalesPlaybook) -> dict:
+    objections = db.scalars(select(SalesObjection).where(
+        SalesObjection.tenant_id == playbook.tenant_id
+    ).order_by(SalesObjection.name)).all()
+    return {
+        "id": playbook.id, "tenant_id": playbook.tenant_id, "enabled": playbook.enabled,
+        "mode": playbook.mode, "brand_tone": playbook.brand_tone,
+        "hot_threshold": playbook.hot_threshold, "warm_threshold": playbook.warm_threshold,
+        "auto_send_min_confidence": playbook.auto_send_min_confidence,
+        "escalation_words": split_terms(playbook.escalation_words),
+        "objections": [{
+            "id": row.id, "tenant_id": row.tenant_id, "name": row.name,
+            "triggers": split_terms(row.triggers), "response": row.response, "active": row.active,
+        } for row in objections],
+    }
 
 
 def _tenant_secret_prefix(tenant_id: str) -> str:
@@ -618,6 +645,134 @@ def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate,
     db.commit()
     db.refresh(delivery)
     return delivery
+
+
+@router.get("/tenants/{tenant_id}/sales/playbook", response_model=SalesPlaybookOutput)
+def sales_playbook_get(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id)
+    playbook = default_playbook(db, tenant_id)
+    db.commit()
+    return _playbook_output(db, playbook)
+
+
+@router.put("/tenants/{tenant_id}/sales/playbook", response_model=SalesPlaybookOutput)
+def sales_playbook_update(tenant_id: str, payload: SalesPlaybookInput,
+                          actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER})
+    if payload.warm_threshold >= payload.hot_threshold:
+        raise HTTPException(status_code=400, detail="El umbral tibio debe ser menor que el caliente")
+    playbook = default_playbook(db, tenant_id)
+    for field in ("enabled", "mode", "brand_tone", "hot_threshold", "warm_threshold",
+                  "auto_send_min_confidence"):
+        setattr(playbook, field, getattr(payload, field))
+    playbook.escalation_words = ",".join(dict.fromkeys(split_terms(",".join(payload.escalation_words))))
+    existing = {row.name.lower(): row for row in db.scalars(select(SalesObjection).where(
+        SalesObjection.tenant_id == tenant_id)).all()}
+    supplied: set[str] = set()
+    for item in payload.objections:
+        key = item.name.strip().lower()
+        supplied.add(key)
+        objection = existing.get(key) or SalesObjection(tenant_id=tenant_id, name=item.name.strip())
+        objection.name = item.name.strip()
+        objection.triggers = ",".join(dict.fromkeys(split_terms(",".join(item.triggers))))
+        objection.response = item.response.strip()
+        objection.active = item.active
+        db.add(objection)
+    for key, objection in existing.items():
+        if key not in supplied:
+            objection.active = False
+    audit(db, user=actor, tenant_id=tenant_id, action="sales.playbook_updated",
+          entity_type="sales_playbook", entity_id=playbook.id,
+          details={"mode": payload.mode.value, "objections": len(payload.objections)})
+    db.commit()
+    return _playbook_output(db, playbook)
+
+
+@router.get("/tenants/{tenant_id}/sales/pending")
+def sales_pending_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
+    rows = db.execute(select(PendingAgentAction, AgentRun, Customer).join(
+        AgentRun, AgentRun.id == PendingAgentAction.run_id
+    ).join(Customer, Customer.id == PendingAgentAction.customer_id).where(
+        PendingAgentAction.tenant_id == tenant_id,
+        PendingAgentAction.status == PendingActionStatus.PENDING,
+    ).order_by(PendingAgentAction.created_at.desc())).all()
+    return [{
+        "id": pending.id, "run_id": run.id, "conversation_id": pending.conversation_id,
+        "customer_id": customer.id, "customer_name": customer.name, "customer_phone": customer.phone,
+        "proposed_text": pending.proposed_text, "created_at": pending.created_at,
+        "intent": run.intent, "confidence": run.confidence, "lead_score": run.lead_score,
+        "temperature": run.temperature, "input_text": run.input_text,
+    } for pending, run, customer in rows]
+
+
+@router.get("/tenants/{tenant_id}/sales/runs")
+def sales_run_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
+    runs = db.scalars(select(AgentRun).where(AgentRun.tenant_id == tenant_id)
+                      .order_by(AgentRun.created_at.desc()).limit(100)).all()
+    return runs
+
+
+@router.post("/tenants/{tenant_id}/sales/pending/{pending_id}/approve")
+async def sales_pending_approve(tenant_id: str, pending_id: str, payload: PendingActionResolveInput,
+                                actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    tenant = assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
+    pending = db.scalar(select(PendingAgentAction).where(
+        PendingAgentAction.id == pending_id, PendingAgentAction.tenant_id == tenant_id).with_for_update())
+    if not pending:
+        raise HTTPException(status_code=404, detail="Acción pendiente no encontrada")
+    if pending.status != PendingActionStatus.PENDING:
+        raise HTTPException(status_code=409, detail="La acción ya fue resuelta")
+    conversation = db.get(Conversation, pending.conversation_id)
+    customer = db.get(Customer, pending.customer_id)
+    text = (payload.text or pending.proposed_text).strip()
+    integration = db.scalar(select(WhatsappIntegration).where(
+        WhatsappIntegration.tenant_id == tenant_id, WhatsappIntegration.active.is_(True)))
+    external_id = None
+    if integration:
+        try:
+            external_id = await send_whatsapp_text(integration, customer.phone, text)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Meta rechazó el mensaje") from exc
+        if external_id is None and not tenant.is_demo:
+            raise HTTPException(status_code=409, detail="El token de WhatsApp no está disponible")
+    elif not tenant.is_demo:
+        raise HTTPException(status_code=409, detail="WhatsApp no está configurado")
+    message = save_message(db, tenant_id=tenant_id, conversation_id=conversation.id,
+                           direction=MessageDirection.OUTBOUND, message_type="text",
+                           text=text, external_id=external_id)
+    pending.status = PendingActionStatus.APPROVED
+    pending.resolved_by_id, pending.resolution_note, pending.resolved_at = actor.id, payload.note, utcnow()
+    run = db.get(AgentRun, pending.run_id)
+    run.status = AgentRunStatus.COMPLETED
+    run.suggested_reply = text
+    conversation.bot_state = "AGENT_APPROVED"
+    conversation.last_message_at = utcnow()
+    audit(db, user=actor, tenant_id=tenant_id, action="sales.reply_approved",
+          entity_type="pending_agent_action", entity_id=pending.id)
+    db.commit()
+    return {"ok": True, "message_id": message.id, "status": pending.status.value}
+
+
+@router.post("/tenants/{tenant_id}/sales/pending/{pending_id}/reject")
+def sales_pending_reject(tenant_id: str, pending_id: str, payload: PendingActionResolveInput,
+                         actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
+    pending = db.scalar(select(PendingAgentAction).where(
+        PendingAgentAction.id == pending_id, PendingAgentAction.tenant_id == tenant_id).with_for_update())
+    if not pending:
+        raise HTTPException(status_code=404, detail="Acción pendiente no encontrada")
+    if pending.status != PendingActionStatus.PENDING:
+        raise HTTPException(status_code=409, detail="La acción ya fue resuelta")
+    pending.status = PendingActionStatus.REJECTED
+    pending.resolved_by_id, pending.resolution_note, pending.resolved_at = actor.id, payload.note, utcnow()
+    conversation = db.get(Conversation, pending.conversation_id)
+    conversation.bot_state = "START"
+    audit(db, user=actor, tenant_id=tenant_id, action="sales.reply_rejected",
+          entity_type="pending_agent_action", entity_id=pending.id)
+    db.commit()
+    return {"ok": True, "status": pending.status.value}
 
 
 @router.get("/tracking/{tracking_token}")

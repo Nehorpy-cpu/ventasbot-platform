@@ -87,6 +87,24 @@ class MessageDirection(str, enum.Enum):
     OUTBOUND = "OUTBOUND"
 
 
+class AgentMode(str, enum.Enum):
+    DRAFT = "DRAFT"
+    AUTOMATIC = "AUTOMATIC"
+
+
+class AgentRunStatus(str, enum.Enum):
+    COMPLETED = "COMPLETED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    ESCALATED = "ESCALATED"
+    FAILED = "FAILED"
+
+
+class PendingActionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -149,6 +167,12 @@ class Customer(Base):
     address: Mapped[str] = mapped_column(String(500), default="")
     latitude: Mapped[str | None] = mapped_column(String(32), nullable=True)
     longitude: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lead_score: Mapped[int] = mapped_column(Integer, default=0)
+    lead_temperature: Mapped[str] = mapped_column(String(20), default="COLD")
+    purchase_intent: Mapped[str] = mapped_column(String(80), default="UNKNOWN")
+    estimated_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    urgency: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    next_action: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -195,6 +219,75 @@ class ConversationMessage(Base):
     message_type: Mapped[str] = mapped_column(String(40), default="text")
     text: Mapped[str] = mapped_column(Text, default="")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SalesPlaybook(Base):
+    __tablename__ = "sales_playbooks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("spb"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    mode: Mapped[AgentMode] = mapped_column(Enum(AgentMode), default=AgentMode.DRAFT)
+    brand_tone: Mapped[str] = mapped_column(Text, default="Claro, amable y breve. Una pregunta por mensaje.")
+    hot_threshold: Mapped[int] = mapped_column(Integer, default=70)
+    warm_threshold: Mapped[int] = mapped_column(Integer, default=40)
+    auto_send_min_confidence: Mapped[int] = mapped_column(Integer, default=90)
+    escalation_words: Mapped[str] = mapped_column(
+        Text, default="humano,asesor,reclamo,abogado,estafa,cancelar,denuncia"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SalesObjection(Base):
+    __tablename__ = "sales_objections"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_sales_objection_tenant_name"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("obj"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    triggers: Mapped[str] = mapped_column(Text)
+    response: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("run"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    input_text: Mapped[str] = mapped_column(Text)
+    intent: Mapped[str] = mapped_column(String(80), default="UNKNOWN")
+    confidence: Mapped[int] = mapped_column(Integer, default=0)
+    lead_score: Mapped[int] = mapped_column(Integer, default=0)
+    temperature: Mapped[str] = mapped_column(String(20), default="COLD")
+    objection_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    suggested_reply: Mapped[str] = mapped_column(Text, default="")
+    decision: Mapped[str] = mapped_column(String(80), default="NO_ACTION")
+    status: Mapped[AgentRunStatus] = mapped_column(Enum(AgentRunStatus), default=AgentRunStatus.COMPLETED)
+    steps_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PendingAgentAction(Base):
+    __tablename__ = "pending_agent_actions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("pnd"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), unique=True, index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
+    action_type: Mapped[str] = mapped_column(String(40), default="SEND_REPLY")
+    proposed_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[PendingActionStatus] = mapped_column(Enum(PendingActionStatus), default=PendingActionStatus.PENDING)
+    resolved_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolution_note: Mapped[str] = mapped_column(Text, default="")
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

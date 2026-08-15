@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import ConversationStatus, DeliveryStatus, InvoiceStatus, MessageDirection, OrderStatus, PaymentStatus, Role, TenantStatus
+from .models import (
+    AgentMode,
+    AgentRunStatus,
+    ConversationStatus,
+    DeliveryStatus,
+    InvoiceStatus,
+    MessageDirection,
+    OrderStatus,
+    PaymentStatus,
+    PendingActionStatus,
+    Role,
+    TenantStatus,
+)
 
 
 class ORMModel(BaseModel):
@@ -101,6 +113,12 @@ class CustomerInput(BaseModel):
 class CustomerOutput(CustomerInput, ORMModel):
     id: str
     tenant_id: str
+    lead_score: int
+    lead_temperature: str
+    purchase_intent: str
+    estimated_budget: int | None
+    urgency: str | None
+    next_action: str | None
 
 
 class OrderItemInput(BaseModel):
@@ -287,3 +305,74 @@ class ConversationAssign(BaseModel):
 
 class SendMessageInput(BaseModel):
     text: str = Field(min_length=1, max_length=4096)
+
+
+class SalesObjectionInput(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    triggers: list[str] = Field(min_length=1, max_length=30)
+    response: str = Field(min_length=2, max_length=2000)
+    active: bool = True
+
+
+class SalesObjectionOutput(SalesObjectionInput, ORMModel):
+    id: str
+    tenant_id: str
+
+
+class SalesPlaybookInput(BaseModel):
+    enabled: bool = True
+    mode: AgentMode = AgentMode.DRAFT
+    brand_tone: str = Field(default="Claro, amable y breve. Una pregunta por mensaje.", max_length=2000)
+    hot_threshold: int = Field(default=70, ge=1, le=100)
+    warm_threshold: int = Field(default=40, ge=0, le=99)
+    auto_send_min_confidence: int = Field(default=90, ge=50, le=100)
+    escalation_words: list[str] = Field(default_factory=list, max_length=50)
+    objections: list[SalesObjectionInput] = Field(default_factory=list, max_length=100)
+
+
+class SalesPlaybookOutput(BaseModel):
+    id: str
+    tenant_id: str
+    enabled: bool
+    mode: AgentMode
+    brand_tone: str
+    hot_threshold: int
+    warm_threshold: int
+    auto_send_min_confidence: int
+    escalation_words: list[str]
+    objections: list[SalesObjectionOutput]
+
+
+class AgentRunOutput(ORMModel):
+    id: str
+    tenant_id: str
+    conversation_id: str
+    customer_id: str
+    input_text: str
+    intent: str
+    confidence: int
+    lead_score: int
+    temperature: str
+    objection_name: str | None
+    suggested_reply: str
+    decision: str
+    status: AgentRunStatus
+    steps_json: str
+
+
+class PendingAgentActionOutput(ORMModel):
+    id: str
+    tenant_id: str
+    run_id: str
+    conversation_id: str
+    customer_id: str
+    action_type: str
+    proposed_text: str
+    status: PendingActionStatus
+    resolved_by_id: str | None
+    resolution_note: str
+
+
+class PendingActionResolveInput(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=4096)
+    note: str = Field(default="", max_length=1000)

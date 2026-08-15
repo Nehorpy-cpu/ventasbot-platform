@@ -28,6 +28,8 @@ from .models import (
     PaymentStatus,
     Product,
     Role,
+    SalesObjection,
+    SalesPlaybook,
     Tenant,
     TenantStatus,
     User,
@@ -239,6 +241,19 @@ def seed_demo(db, demo_password: str) -> None:
                                 text="¡Hola Ana! Te muestro lo disponible."),
         ])
     db.flush()
+    playbook = db.scalar(select(SalesPlaybook).where(SalesPlaybook.tenant_id == tenant.id))
+    if not playbook:
+        db.add(SalesPlaybook(tenant_id=tenant.id))
+    demo_objections = (
+        ("PRECIO", "es caro,muy caro,no me alcanza", "Entiendo. Podemos revisar una opción más económica sin perder calidad. ¿Qué presupuesto tenés?"),
+        ("ENVÍO", "tarda mucho,demora", "Te confirmo el horario antes de cerrar la compra y podrás seguir el delivery en tiempo real."),
+        ("CONFIANZA", "es seguro,no confio,no confío", "Tu pedido queda registrado y el pago con tarjeta se realiza en el checkout seguro de Bancard."),
+    )
+    existing_objections = set(db.scalars(select(SalesObjection.name).where(
+        SalesObjection.tenant_id == tenant.id)).all())
+    for name, triggers, response in demo_objections:
+        if name not in existing_objections:
+            db.add(SalesObjection(tenant_id=tenant.id, name=name, triggers=triggers, response=response))
     seed_demo_history(db, tenant, driver)
 
 

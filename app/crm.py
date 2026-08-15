@@ -31,6 +31,7 @@ from .models import (
 )
 from .services import change_order_status
 from .payment_gateway import create_bancard_checkout
+from .sales_agent import run_commercial_agent
 
 log = logging.getLogger("ventasbot.crm")
 
@@ -211,10 +212,6 @@ def bot_reply(db: Session, conversation: Conversation, incoming: MensajeEntrante
     if checkout_reply is not None:
         return checkout_reply
     text = incoming.texto.strip().lower()
-    if any(word in text for word in ("humano", "asesor", "persona", "operador")):
-        conversation.status = ConversationStatus.HUMAN
-        conversation.bot_state = "WAITING_HUMAN"
-        return "Perfecto. Te paso con una persona del equipo. Ya guardé esta conversación para que continúe desde aquí."
     if any(word in text for word in ("catálogo", "catalogo", "productos", "comprar")):
         products = db.scalars(select(Product).where(
             Product.tenant_id == conversation.tenant_id,
@@ -229,6 +226,11 @@ def bot_reply(db: Session, conversation: Conversation, incoming: MensajeEntrante
         lines.append("\nDecime el producto y la cantidad, o escribí *asesor*.")
         conversation.bot_state = "BROWSING_CATALOG"
         return "\n".join(lines)
+    agent_reply = run_commercial_agent(db, conversation, incoming)
+    if agent_reply is not None:
+        return agent_reply
+    if conversation.bot_state == "WAITING_AGENT_APPROVAL":
+        return None
     if not text:
         return "Recibí tu mensaje. Por ahora podés escribir *catálogo* o *asesor*."
     return "¡Hola! Puedo ayudarte a comprar. Escribí *catálogo* para ver productos o *asesor* para hablar con una persona."
