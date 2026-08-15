@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -14,7 +14,8 @@ from app.main import app
 from app.models import Role, User
 from app.crm import bot_reply, get_or_create_conversation
 from app.mensajes import MensajeEntrante
-from app.models import Customer, Order, PaymentMethodConfig, Product, Tenant
+from app.models import Customer, Delivery, Invoice, Order, Payment, PaymentMethodConfig, Product, Tenant
+from app.seed import seed_demo
 
 
 @pytest.fixture
@@ -65,6 +66,23 @@ def create_tenant(client: TestClient, root_headers: dict[str, str], *, slug: str
     })
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_seed_demo_crea_historial_completo_sin_duplicar():
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, expire_on_commit=False)
+    with TestingSession() as db:
+        seed_demo(db, "demo-segura-123")
+        db.commit()
+        seed_demo(db, "demo-segura-123")
+        db.commit()
+        tenant = db.scalar(select(Tenant).where(Tenant.slug == "pizzeria-demo"))
+        assert tenant is not None
+        expected = {Customer: 6, Order: 5, Payment: 5, Invoice: 5, Delivery: 2}
+        for model, count in expected.items():
+            actual = db.scalar(select(func.count()).select_from(model).where(model.tenant_id == tenant.id))
+            assert actual == count
 
 
 def test_superadmin_crea_tenant_y_owner_inicia_sesion(platform):

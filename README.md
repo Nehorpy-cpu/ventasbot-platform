@@ -46,6 +46,8 @@ Copy-Item .env.example .env
 
 Definí `JWT_SECRET`, `SUPERADMIN_PASSWORD` y, para el comercio demo, `SEED_DEMO=1` y `DEMO_PASSWORD`. Panel: `http://localhost:8099/panel/`. OpenAPI: `http://localhost:8099/docs`.
 
+El seed demo carga de forma idempotente clientes, conversaciones, cinco pedidos en estados diferentes, pagos, facturas y entregas. Para capacitación están disponibles el [manual Word ilustrado](docs/manual/Manual_de_uso_VentasBot.docx) y la [fuente preparada para NotebookLM](docs/manual/MANUAL_NOTEBOOKLM.md).
+
 En producción el contenedor ejecuta `alembic upgrade head` antes de iniciar. Para crear futuras revisiones: `alembic revision --autogenerate -m "descripcion"`; revisá el SQL generado antes de aplicarlo.
 
 ## WhatsApp y secretos
