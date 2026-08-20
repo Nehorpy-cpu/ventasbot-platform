@@ -132,6 +132,7 @@ class OrderOutput(ORMModel):
     notes: str
     source: str
     items: list[OrderItemOutput]
+    proximos_estados: list[OrderStatus]
 
 
 class StatusChange(BaseModel):
@@ -209,3 +210,12 @@ class WhatsAppAccountOutput(BaseModel):
 class WhatsAppPruebaOutput(BaseModel):
     ok: bool
     detalle: str
+
+
+class OrderDetalleOutput(BaseModel):
+    """Todo lo que el panel necesita para operar un pedido en una sola llamada."""
+
+    pedido: OrderOutput
+    pagos: list[PaymentOutput]
+    saldo: int
+    entrega: DeliveryOutput | None

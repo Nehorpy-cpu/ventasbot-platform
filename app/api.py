@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -51,12 +51,14 @@ from .schemas import (
     TenantOutput,
     TokenOutput,
     UserCreate,
+    OrderDetalleOutput,
     UserOutput,
     WhatsAppAccountInput,
     WhatsAppAccountOutput,
     WhatsAppPruebaOutput,
 )
 from .mensajes import probar_credenciales
+from .notificaciones import avisar_cambio_de_estado
 from .services import (
     DELIVERY_TO_ORDER,
     audit,
@@ -65,6 +67,7 @@ from .services import (
     create_tenant,
     ensure_delivery,
     register_payment,
+    saldo_pendiente,
 )
 from .whatsapp import credenciales_de_cuenta, cuenta_de_tenant, guardar_cuenta, marcar_verificada
 
@@ -219,10 +222,14 @@ def order_list(tenant_id: str, actor: User = Depends(current_user), db: Session 
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/status", response_model=OrderOutput)
-def order_status(tenant_id: str, order_id: str, payload: StatusChange,
+def order_status(tenant_id: str, order_id: str, payload: StatusChange, tareas: BackgroundTasks,
                  actor: User = Depends(current_user), db: Session = Depends(get_db)):
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER, Role.WAREHOUSE, Role.DISPATCHER})
-    return change_order_status(db, get_order(db, tenant_id, order_id), payload.status, actor)
+    pedido = change_order_status(db, get_order(db, tenant_id, order_id), payload.status, actor)
+    # El aviso al cliente va después de guardar y en background: si Meta no
+    # contesta, el pedido igual ya cambió de estado.
+    tareas.add_task(avisar_cambio_de_estado, pedido.id, payload.status, cfg.graph_version)
+    return pedido
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/payments", response_model=PaymentOutput, status_code=201)
@@ -299,6 +306,38 @@ def public_tracking(tracking_token: str, db: Session = Depends(get_db)):
         "updated_at": delivery.updated_at,
     }
 
+
+@router.get("/tenants/{tenant_id}/users", response_model=list[UserOutput])
+def user_list(tenant_id: str, rol: Role | None = None,
+              actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Equipo de la empresa. Con `rol=DRIVER` sale la lista de repartidores."""
+    assert_tenant_access(db, actor, tenant_id)
+    consulta = select(User).where(User.tenant_id == tenant_id)
+    if rol:
+        consulta = consulta.where(User.role == rol)
+    return db.scalars(consulta.order_by(User.name)).all()
+
+
+@router.get("/tenants/{tenant_id}/orders/{order_id}", response_model=OrderDetalleOutput)
+def order_detalle(tenant_id: str, order_id: str,
+                  actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Pedido, pagos, saldo y entrega en una sola llamada.
+
+    El panel necesita las cuatro cosas juntas para decidir qué botones mostrar;
+    pedirlas por separado era una cascada de requests por fila de la tabla.
+    """
+    assert_tenant_access(db, actor, tenant_id)
+    pedido = get_order(db, tenant_id, order_id)
+    pagos = db.scalars(
+        select(Payment).where(Payment.order_id == order_id).order_by(Payment.created_at)
+    ).all()
+    entrega = db.scalar(select(Delivery).where(Delivery.order_id == order_id))
+    return OrderDetalleOutput(
+        pedido=OrderOutput.model_validate(pedido),
+        pagos=[PaymentOutput.model_validate(p) for p in pagos],
+        saldo=saldo_pendiente(db, pedido),
+        entrega=DeliveryOutput.model_validate(entrega) if entrega else None,
+    )
 
 # --- Número de WhatsApp de cada empresa -------------------------------------
 

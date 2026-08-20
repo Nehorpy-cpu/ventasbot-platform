@@ -6,3 +6,34 @@
 main{padding:2rem clamp(1rem,4vw,4rem);min-width:0}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem}header h1{font-size:clamp(2rem,4vw,3.2rem);letter-spacing:-.05em;margin:.15rem 0}.status-pill{display:flex;align-items:center;gap:.7rem;background:white;border:1px solid var(--line);border-radius:999px;padding:.65rem 1rem;font-weight:700;font-size:.85rem}.status-pill i{background:#20b26b;box-shadow:none}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}.metric{padding:1.5rem}.metric strong{display:block;font-size:2.3rem;letter-spacing:-.05em;margin-top:.55rem}.metric small{color:var(--muted);font-weight:700}.section-card{margin-top:1.2rem;padding:1.3rem;overflow:auto}.section-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}.section-head h2{margin:0}.inline-form{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:.7rem}.inline-form .primary{align-self:end}.inline-form label{margin:0}.table{width:100%;border-collapse:collapse;min-width:680px}.table th{text-align:left;font-size:.72rem;letter-spacing:.08em;color:var(--muted);padding:.8rem;border-bottom:1px solid var(--line)}.table td{padding:.9rem .8rem;border-bottom:1px solid #edf1ef}.badge{display:inline-block;padding:.35rem .65rem;border-radius:999px;background:#e9f6ef;color:#15724b;font-size:.75rem;font-weight:800}.empty{padding:3rem;text-align:center;color:var(--muted)}.toast{position:fixed;right:1rem;top:1rem;background:var(--nav);color:white;padding:.9rem 1.2rem;border-radius:12px;z-index:10;opacity:0;transform:translateY(-10px);transition:.2s}.toast.show{opacity:1;transform:none}
 @media(max-width:850px){.login-shell{grid-template-columns:1fr;padding:2rem}.login-copy h1{font-size:3.8rem}.app-shell{grid-template-columns:1fr}aside{position:static;height:auto;min-height:auto}nav{margin-top:1rem;grid-template-columns:repeat(4,1fr);overflow:auto}.sidebar-footer{display:none}.grid{grid-template-columns:1fr}.inline-form{grid-template-columns:1fr 1fr}main{padding:1.2rem}header{align-items:flex-start}.status-pill{display:none}}
 @media(max-width:520px){.login-copy{display:none}.login-shell{background:var(--paper);padding:1rem}.inline-form{grid-template-columns:1fr}nav{grid-template-columns:repeat(2,1fr)}}
+
+/* Panel operativo: acciones sobre pedidos y carga del número de WhatsApp. */
+.secundario{background:#eef3f0;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:.7rem 1rem;font-weight:700}
+.secundario:hover{background:#e3ebe6}.secundario:disabled{opacity:.55;cursor:default}
+.chico{padding:.45rem .8rem;font-size:.8rem;border-radius:8px}
+select{width:100%;border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem;background:#fbfcfb;color:var(--ink);font:inherit}
+.form-columna{display:grid;gap:.2rem;max-width:520px}
+.form-columna .primary{width:auto;padding:.9rem 1.6rem}
+.fila-check{display:flex;align-items:center;gap:.6rem;font-weight:700;margin:1.2rem 0}
+.fila-check input{width:auto}
+.acciones{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:.6rem}
+.pills{display:flex;gap:.45rem;flex-wrap:wrap}
+.badge-tibio{background:#fdf3e2;color:#8a5a12}
+.aviso{background:#fdf3e2;border:1px solid #f0dcb8;color:#8a5a12;padding:.9rem 1.1rem;border-radius:12px;font-weight:600}
+.pasos{color:var(--muted);line-height:1.75;padding-left:1.2rem;margin:0}
+.pasos b{color:var(--ink)}
+.detalle-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:2rem}
+.detalle-grid h3{font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:1.6rem 0 .6rem;display:flex;align-items:center;gap:.6rem}
+.detalle-grid h3:first-child{margin-top:0}
+.detalle-grid .inline-form{grid-template-columns:1fr auto;align-items:end}
+.table.compacta{min-width:0}
+.table.compacta td,.table.compacta th{padding:.55rem .5rem;font-size:.9rem}
+.totales{font-size:.95rem;margin:.8rem 0 .3rem}
+.lista{margin:0 0 .9rem;padding-left:1.1rem;color:var(--ink);line-height:1.7}
+.sin-stock{color:var(--danger)}
+.toast.error{background:var(--danger)}
+.estado-DELIVERED{background:#e9f6ef;color:#15724b}
+.estado-CANCELLED{background:#fbe9e7;color:var(--danger)}
+.estado-PENDING_CONFIRMATION,.estado-PENDING_PAYMENT{background:#fdf3e2;color:#8a5a12}
+.estado-IN_TRANSIT,.estado-ASSIGNED{background:#e7effb;color:#1c4f8a}
+@media(max-width:850px){.detalle-grid{grid-template-columns:1fr;gap:1rem}.detalle-grid .inline-form{grid-template-columns:1fr}}

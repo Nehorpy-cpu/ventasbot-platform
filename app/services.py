@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from .auth import hash_password
 from .models import (
+    ALLOWED_ORDER_TRANSITIONS,
+    ESTADOS_CON_STOCK_DESCONTADO,
     AuditLog,
     Customer,
     Delivery,
@@ -142,30 +144,6 @@ def create_order(db: Session, tenant_id: str, payload: OrderCreate, actor: User)
     db.commit()
     db.refresh(order)
     return order
-
-
-ALLOWED_ORDER_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
-    OrderStatus.DRAFT: {OrderStatus.PENDING_CONFIRMATION, OrderStatus.CANCELLED},
-    OrderStatus.PENDING_CONFIRMATION: {OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED, OrderStatus.CANCELLED},
-    OrderStatus.PENDING_PAYMENT: {OrderStatus.CONFIRMED, OrderStatus.CANCELLED},
-    OrderStatus.CONFIRMED: {OrderStatus.PREPARING, OrderStatus.CANCELLED},
-    OrderStatus.PREPARING: {OrderStatus.READY, OrderStatus.CANCELLED},
-    OrderStatus.READY: {OrderStatus.ASSIGNED, OrderStatus.CANCELLED},
-    OrderStatus.ASSIGNED: {OrderStatus.IN_TRANSIT, OrderStatus.CANCELLED},
-    OrderStatus.IN_TRANSIT: {OrderStatus.DELIVERED, OrderStatus.CANCELLED},
-    OrderStatus.DELIVERED: set(),
-    OrderStatus.CANCELLED: set(),
-}
-
-# Estados en los que el stock del pedido YA se descontó del catálogo. Si un
-# pedido en cualquiera de estos se cancela, hay que devolver las unidades.
-ESTADOS_CON_STOCK_DESCONTADO = {
-    OrderStatus.CONFIRMED,
-    OrderStatus.PREPARING,
-    OrderStatus.READY,
-    OrderStatus.ASSIGNED,
-    OrderStatus.IN_TRANSIT,
-}
 
 
 def _productos_del_pedido(db: Session, order: Order) -> dict[str, Product]:

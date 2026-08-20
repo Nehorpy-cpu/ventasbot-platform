@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Query, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import inspect, select, text
@@ -73,6 +73,19 @@ def ya_procesado(id_mensaje: str) -> bool:
     while len(_ids_procesados) > MAX_IDS_RECORDADOS:
         _ids_procesados.popitem(last=False)
     return False
+
+
+@app.get("/seguimiento/{tracking_token}", response_class=HTMLResponse)
+def seguimiento(tracking_token: str) -> Response:
+    """Página que le mandás al cliente para que vea dónde está su pedido.
+
+    El token no se valida acá: la página se sirve igual y es el fetch a
+    /api/tracking/{token} el que decide si hay algo que mostrar.
+    """
+    pagina = static_dir / "seguimiento.html"
+    if not pagina.exists():
+        return Response(status_code=404)
+    return HTMLResponse(pagina.read_text(encoding="utf-8"))
 
 
 @app.get("/salud")

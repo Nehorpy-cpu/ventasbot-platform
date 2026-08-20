@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seguimiento de tu pedido</title>
+  <link rel="stylesheet" href="/panel/styles.css">
+  <style>
+    body{display:grid;place-items:center;min-height:100vh;padding:1.2rem}
+    .track{max-width:520px;width:100%;padding:clamp(1.4rem,5vw,2.4rem)}
+    .track h1{font-size:1.9rem;letter-spacing:-.04em;margin:.4rem 0 1.4rem}
+    .linea{display:grid;gap:.9rem;margin:1.6rem 0}
+    .paso{display:flex;align-items:center;gap:.9rem;color:var(--muted)}
+    .paso i{width:12px;height:12px;border-radius:50%;background:var(--line);flex:none}
+    .paso.hecho{color:var(--ink);font-weight:700}
+    .paso.hecho i{background:var(--green)}
+    .paso.actual i{box-shadow:0 0 0 5px rgba(28,138,91,.16)}
+    .pie{color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);padding-top:1rem}
+  </style>
+</head>
+<body>
+  <main class="card track">
+    <span class="eyebrow">SEGUIMIENTO</span>
+    <h1 id="titulo">Buscando tu pedido…</h1>
+    <div class="linea" id="linea"></div>
+    <p class="pie" id="pie"></p>
+  </main>
+  <script>
+    const PASOS = [
+      ['CONFIRMED', 'Pedido confirmado'],
+      ['PREPARING', 'Preparándolo'],
+      ['READY', 'Listo para salir'],
+      ['ASSIGNED', 'Repartidor asignado'],
+      ['IN_TRANSIT', 'En camino'],
+      ['DELIVERED', 'Entregado'],
+    ];
+    const esc = v => String(v ?? '').replace(/[&<>'"]/g, c => (
+      {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+    async function cargar() {
+      const token = location.pathname.split('/').filter(Boolean).pop();
+      try {
+        const r = await fetch(`/api/tracking/${encodeURIComponent(token)}`);
+        if (!r.ok) throw new Error('No encontramos ese pedido.');
+        pintar(await r.json());
+      } catch (e) {
+        document.getElementById('titulo').textContent = e.message;
+      }
+    }
+
+    function pintar(d) {
+      if (d.order_status === 'CANCELLED') {
+        document.getElementById('titulo').textContent = 'Este pedido fue cancelado.';
+        return;
+      }
+      const indice = PASOS.findIndex(([clave]) => clave === d.order_status);
+      document.getElementById('titulo').textContent =
+        indice >= 0 ? PASOS[indice][1] : 'Estamos procesando tu pedido';
+      document.getElementById('linea').innerHTML = PASOS.map(([clave, texto], i) => {
+        const clases = ['paso'];
+        if (indice >= 0 && i <= indice) clases.push('hecho');
+        if (i === indice) clases.push('actual');
+        return `<div class="${clases.join(' ')}"><i></i>${esc(texto)}</div>`;
+      }).join('');
+      const cuando = d.updated_at ? new Date(d.updated_at).toLocaleString('es-PY') : '';
+      document.getElementById('pie').textContent =
+        `Pedido ${d.order_id.slice(-8)}${cuando ? ` · actualizado ${cuando}` : ''}`;
+    }
+
+    cargar();
+    // El estado cambia mientras el cliente mira: refrescar sin que recargue.
+    setInterval(cargar, 30000);
+  </script>
+</body>
+</html>

@@ -153,6 +153,11 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     items: Mapped[list[OrderItem]] = relationship(back_populates="order", cascade="all, delete-orphan")
 
+    @property
+    def proximos_estados(self) -> list[OrderStatus]:
+        """Transiciones válidas desde donde está. El panel dibuja esto."""
+        return siguientes_estados(self.status)
+
 
 class OrderItem(Base):
     __tablename__ = "order_items"
@@ -235,3 +240,49 @@ class WhatsAppAccount(Base):
     verificado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# La máquina de estados vive con el modelo, no en el servicio, porque el panel
+# también necesita saber qué transiciones son válidas para dibujar los botones.
+ALLOWED_ORDER_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
+    OrderStatus.DRAFT: {OrderStatus.PENDING_CONFIRMATION, OrderStatus.CANCELLED},
+    OrderStatus.PENDING_CONFIRMATION: {OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED, OrderStatus.CANCELLED},
+    OrderStatus.PENDING_PAYMENT: {OrderStatus.CONFIRMED, OrderStatus.CANCELLED},
+    OrderStatus.CONFIRMED: {OrderStatus.PREPARING, OrderStatus.CANCELLED},
+    OrderStatus.PREPARING: {OrderStatus.READY, OrderStatus.CANCELLED},
+    OrderStatus.READY: {OrderStatus.ASSIGNED, OrderStatus.CANCELLED},
+    OrderStatus.ASSIGNED: {OrderStatus.IN_TRANSIT, OrderStatus.CANCELLED},
+    OrderStatus.IN_TRANSIT: {OrderStatus.DELIVERED, OrderStatus.CANCELLED},
+    OrderStatus.DELIVERED: set(),
+    OrderStatus.CANCELLED: set(),
+}
+
+# Estados en los que el stock del pedido YA se descontó del catálogo. Si un
+# pedido en cualquiera de estos se cancela, hay que devolver las unidades.
+ESTADOS_CON_STOCK_DESCONTADO = {
+    OrderStatus.CONFIRMED,
+    OrderStatus.PREPARING,
+    OrderStatus.READY,
+    OrderStatus.ASSIGNED,
+    OrderStatus.IN_TRANSIT,
+}
+
+# Orden en que se recorre el flujo feliz, para que el panel sugiera el paso
+# siguiente en vez de una lista alfabética.
+ORDEN_DEL_FLUJO = [
+    OrderStatus.DRAFT,
+    OrderStatus.PENDING_CONFIRMATION,
+    OrderStatus.PENDING_PAYMENT,
+    OrderStatus.CONFIRMED,
+    OrderStatus.PREPARING,
+    OrderStatus.READY,
+    OrderStatus.ASSIGNED,
+    OrderStatus.IN_TRANSIT,
+    OrderStatus.DELIVERED,
+    OrderStatus.CANCELLED,
+]
+
+
+def siguientes_estados(actual: OrderStatus) -> list[OrderStatus]:
+    permitidos = ALLOWED_ORDER_TRANSITIONS.get(actual, set())
+    return [estado for estado in ORDEN_DEL_FLUJO if estado in permitidos]
