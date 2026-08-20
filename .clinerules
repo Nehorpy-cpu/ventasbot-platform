@@ -31,3 +31,20 @@
   contenido completo de .env en la salida de consola/logs.
 - Antes de instalar una librería nueva, preguntar o justificar por qué (evitar
   dependencias innecesarias que amplíen la superficie de ataque).
+
+## Git: subir siempre al repo (obligatorio)
+
+- Este repo tiene remoto real: origin -> github.com/Nehorpy-cpu/ventasbot-platform.
+- Al terminar CUALQUIER tarea que deje el código en un estado funcional
+  (tests pasando, bandit/pip-audit sin hallazgos nuevos de severidad alta):
+  1. `git add` de los archivos relevantes (nunca `.env`, `*.db`, ni nada que
+     ya esté en .gitignore).
+  2. `git commit` con un mensaje corto y claro de qué cambió y por qué.
+  3. `git push origin <rama-actual>`.
+- No dejes trabajo terminado solo en el disco sin commitear/pushear — si el
+  PC tiene un problema, ese trabajo se pierde. Commitear seguido, en cambios
+  chicos, es mejor que un commit gigante al final.
+- Si un cambio queda a medio hacer o rompe tests, no lo pushees — avisá en
+  el resumen que quedó pendiente y por qué no se subió.
+- Nunca hagas force-push a main/master ni reescribas historia sin que el
+  usuario lo pida explícitamente.
