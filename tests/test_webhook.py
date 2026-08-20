@@ -20,7 +20,11 @@ def cliente(monkeypatch):
         enviados.append((para, texto))
         return {"messages": [{"id": "wamid.fake"}]}
 
+    async def falsa_ia(cfg, mensaje):
+        return f"Recibí: {mensaje.texto}"
+
     monkeypatch.setattr(main, "enviar_texto", falso_enviar)
+    monkeypatch.setattr(main, "generar_respuesta", falsa_ia)
     with TestClient(main.app) as c:
         c.enviados = enviados
         yield c

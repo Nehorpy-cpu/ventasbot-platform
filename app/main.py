@@ -8,19 +8,35 @@ GET  /salud    -> chequeo de configuración
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Query, Request, Response
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import cargar
+from .ia import generar_respuesta
 from .mensajes import MensajeEntrante, enviar_texto, extraer_mensajes
 from .security import firma_valida
+from .api import router as api_router
+from .database import create_schema
 
 log = logging.getLogger("whatsapp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-app = FastAPI(title="WhatsApp Cloud API webhook")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    create_schema()
+    yield
+
+
+app = FastAPI(title="VentasBot Platform API", lifespan=lifespan)
 cfg = cargar()
+app.include_router(api_router)
+static_dir = Path(__file__).with_name("static")
+if static_dir.exists():
+    app.mount("/panel", StaticFiles(directory=static_dir, html=True), name="panel")
 
 
 @app.get("/salud")
@@ -67,13 +83,13 @@ async def recibir(request: Request, tareas: BackgroundTasks) -> Response:
 
 
 async def procesar(mensaje: MensajeEntrante) -> None:
-    """Acá va la lógica del bot. Por ahora, eco."""
+    """Responde con el modelo local (Ollama). Ver app/ia.py."""
     log.info("Mensaje de %s (%s): %r", mensaje.de, mensaje.tipo, mensaje.texto)
 
     if mensaje.tipo != "text":
         respuesta = "Por ahora solo entiendo texto."
     else:
-        respuesta = f"Recibí: {mensaje.texto}"
+        respuesta = await generar_respuesta(cfg, mensaje)
 
     try:
         await enviar_texto(cfg, mensaje.de, respuesta)

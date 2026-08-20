@@ -1,0 +1,33 @@
+# Reglas para agentes de código en VentasBot (D:\whatsapp-webhook)
+
+- Código y comentarios en español (Paraguay/Rioplatense informal, tono directo).
+- Nunca hardcodear secrets: todo va vía .env y app/config.py (dataclass Config).
+- Tests en tests/, SIN pytest-asyncio/anyio instalado: lo async se testea con
+  asyncio.run(...) dentro de una función def normal, no @pytest.mark.anyio.
+- Antes de tocar app/main.py, leer app/ia.py: ahí vive la integración con el
+  modelo local (Ollama) y el fallback si Ollama no responde.
+- El webhook hoy usa un solo PHONE_NUMBER_ID global (.env) — todavía no resuelve
+  qué tenant corresponde a cada número entrante. No inventar esa resolución sin
+  confirmar antes: es una decisión de producto, no técnica.
+- Base real de desarrollo: D:\whatsapp-webhook\ventasbot.db (SQLite). No crear
+  bases de datos nuevas sin avisar.
+
+## Testing y auditoría (obligatorio, no opcional)
+
+- Después de CUALQUIER cambio de código (nuevo endpoint, fix, refactor):
+  1. Correr la suite completa: `.venv\Scripts\python.exe -m pytest -q`
+  2. Si agregaste lógica nueva (no solo un fix de una línea), agregar un test
+     nuevo en tests/ que la cubra ANTES de dar la tarea por terminada.
+  3. Si algún test falla, no lo comentes ni lo borres para "que pase" —
+     arreglá la causa o preguntá si el test está mal escrito.
+- Antes de cerrar cualquier tarea que toque código (no solo docs/config):
+  1. Correr `.venv\Scripts\python.exe -m bandit -r app -q` (análisis estático
+     de seguridad) y revisar los hallazgos de severidad medium/high.
+  2. Correr `.venv\Scripts\python.exe -m pip_audit` (vulnerabilidades
+     conocidas en dependencias) y reportar si hay alguna con severidad alta.
+  3. Reportar en el resumen final: qué tests corriste, si pasaron, y si
+     bandit/pip-audit encontraron algo — aunque sea "sin hallazgos".
+- Nunca loguear ni imprimir tokens, secrets, PHONE_NUMBER_ID reales, ni
+  contenido completo de .env en la salida de consola/logs.
+- Antes de instalar una librería nueva, preguntar o justificar por qué (evitar
+  dependencias innecesarias que amplíen la superficie de ataque).

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VentasBot</title>
+  <link rel="stylesheet" href="/panel/styles.css">
+</head>
+<body>
+  <div id="toast" class="toast" role="status"></div>
+  <section id="login-view" class="login-shell">
+    <div class="login-copy">
+      <span class="eyebrow">COMERCIO CONVERSACIONAL</span>
+      <h1>Tu negocio vende.<br><em>VentasBot coordina.</em></h1>
+      <p>WhatsApp, pedidos, cobros y delivery en un solo lugar, pensado para Paraguay.</p>
+      <div class="signal"><span></span> Plataforma operativa</div>
+    </div>
+    <form id="login-form" class="card login-card">
+      <div class="brand-mark">VB</div>
+      <h2>Ingresar</h2>
+      <p class="muted">Usá tu cuenta de plataforma o empresa.</p>
+      <label>Empresa <small>(vacío para superadmin)</small>
+        <input name="tenant_slug" placeholder="pizzeria-central" autocomplete="organization">
+      </label>
+      <label>Correo
+        <input name="email" type="email" required autocomplete="username">
+      </label>
+      <label>Contraseña
+        <input name="password" type="password" required autocomplete="current-password">
+      </label>
+      <button class="primary" type="submit">Entrar al panel</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </section>
+
+  <div id="app-view" class="app-shell hidden">
+    <aside>
+      <div class="sidebar-brand"><b>VB</b><span>VentasBot</span></div>
+      <nav>
+        <button data-view="dashboard" class="active">Resumen</button>
+        <button data-view="tenants" class="platform-only">Empresas</button>
+        <button data-view="products" class="tenant-only">Catálogo</button>
+        <button data-view="orders" class="tenant-only">Pedidos</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="user-name"></span>
+        <small id="user-role"></small>
+        <button id="logout" class="ghost">Cerrar sesión</button>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div><span class="eyebrow" id="context-label">PLATAFORMA</span><h1 id="page-title">Resumen</h1></div>
+        <span class="status-pill"><i></i> En línea</span>
+      </header>
+      <section id="content" aria-live="polite"></section>
+    </main>
+  </div>
+  <script src="/panel/app.js" defer></script>
+</body>
+</html>

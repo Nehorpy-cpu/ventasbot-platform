@@ -18,6 +18,8 @@ class Config:
     access_token: str
     waba_id: str
     graph_version: str
+    ollama_base_url: str
+    ollama_model: str
 
     @property
     def url_mensajes(self) -> str:
@@ -45,4 +47,6 @@ def cargar() -> Config:
         access_token=os.getenv("ACCESS_TOKEN", ""),
         waba_id=os.getenv("WABA_ID", ""),
         graph_version=os.getenv("GRAPH_VERSION", "v21.0"),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "qwen3.8:27b"),
     )
