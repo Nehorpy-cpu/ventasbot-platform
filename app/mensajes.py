@@ -129,4 +129,16 @@ async def probar_credenciales(credenciales: Credenciales) -> tuple[bool, str]:
         datos = r.json()
         return True, datos.get("display_phone_number", "")
     detalle = (r.json().get("error", {}) or {}).get("message", r.text[:200]) if r.content else r.reason_phrase
-    return False, detalle
+    return False, _sin_token(detalle, credenciales.access_token)
+
+
+def _sin_token(texto: str, token: str) -> str:
+    """Saca el token del mensaje de error antes de devolverlo.
+
+    Meta contesta cosas como "Malformed access token EAAG...": si eso se
+    devuelve tal cual, el panel termina mostrando entero un token que a
+    propósito solo se muestra enmascarado.
+    """
+    if token and token in texto:
+        return texto.replace(token, "***")
+    return texto

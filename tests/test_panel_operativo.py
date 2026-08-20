@@ -91,3 +91,67 @@ def test_la_pagina_de_seguimiento_se_sirve_publica(platform):
     assert r.status_code == 200
     assert "Seguimiento" in r.text
     assert "/api/tracking/" in r.text
+
+
+def test_el_pago_que_confirma_el_pedido_avisa_al_cliente(platform, monkeypatch):
+    """Confirmar cobrando tiene que avisar igual que confirmar a mano."""
+    from app import api
+
+    avisos = []
+
+    async def falso_aviso(order_id, estado, graph_version):
+        avisos.append(estado.value)
+
+    monkeypatch.setattr(api, "avisar_cambio_de_estado", falso_aviso)
+    client, _ = platform
+    tenant, owner, pedido = montar(client)
+
+    client.post(f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/payments", headers=owner, json={
+        "provider": "CASH", "status": "APPROVED", "amount": pedido["total"],
+        "idempotency_key": "cobro-total-01"})
+
+    assert avisos == ["CONFIRMED"]
+
+
+def test_un_pago_parcial_no_avisa_nada(platform, monkeypatch):
+    from app import api
+
+    avisos = []
+
+    async def falso_aviso(order_id, estado, graph_version):
+        avisos.append(estado.value)
+
+    monkeypatch.setattr(api, "avisar_cambio_de_estado", falso_aviso)
+    client, _ = platform
+    tenant, owner, pedido = montar(client)
+
+    client.post(f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/payments", headers=owner, json={
+        "provider": "CASH", "status": "APPROVED", "amount": 10000,
+        "idempotency_key": "cobro-parcial-01"})
+
+    assert avisos == [], "el pedido no cambió de estado: no hay nada que avisar"
+
+
+def test_asignar_repartidor_avisa_al_cliente(platform, monkeypatch):
+    from app import api
+
+    avisos = []
+
+    async def falso_aviso(order_id, estado, graph_version):
+        avisos.append(estado.value)
+
+    monkeypatch.setattr(api, "avisar_cambio_de_estado", falso_aviso)
+    client, _ = platform
+    tenant, owner, pedido = montar(client)
+    chofer = client.post(f"/api/tenants/{tenant['id']}/users", headers=owner, json={
+        "email": "chofer2@operativa.com", "name": "Chofer", "password": "chofer-segura-1",
+        "role": "DRIVER"}).json()
+    for estado in ("CONFIRMED", "PREPARING", "READY"):
+        client.post(f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/status",
+                    headers=owner, json={"status": estado})
+    avisos.clear()
+
+    client.post(f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/delivery/assign",
+                headers=owner, json={"driver_id": chofer["id"]})
+
+    assert avisos == ["ASSIGNED"]

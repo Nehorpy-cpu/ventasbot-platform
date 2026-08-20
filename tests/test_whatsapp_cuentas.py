@@ -118,3 +118,36 @@ def test_el_numero_debe_ser_numerico(platform):
     r = client.put(f"/api/tenants/{tenant['id']}/whatsapp", headers=owner, json={
         "phone_number_id": "no-es-un-id", "access_token": "token"})
     assert r.status_code == 422
+
+
+def test_el_error_de_meta_no_devuelve_el_token_en_claro():
+    """Meta contesta 'Malformed access token EAAG...' y eso no puede salir así."""
+    import asyncio
+
+    import httpx
+
+    from app.mensajes import Credenciales, probar_credenciales
+
+    class RespuestaFalsa:
+        status_code = 400
+        content = b"x"
+        text = "cuerpo crudo"
+        def json(self):
+            return {"error": {"message": "Malformed access token TOKEN-SECRETO-123"}}
+
+    class ClienteFalso:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return False
+        async def get(self, *_a, **_kw): return RespuestaFalsa()
+
+    original = httpx.AsyncClient
+    httpx.AsyncClient = lambda **_: ClienteFalso()
+    try:
+        ok, detalle = asyncio.run(probar_credenciales(
+            Credenciales(phone_number_id="1", access_token="TOKEN-SECRETO-123")))
+    finally:
+        httpx.AsyncClient = original
+
+    assert ok is False
+    assert "TOKEN-SECRETO-123" not in detalle
+    assert "Malformed access token ***" == detalle

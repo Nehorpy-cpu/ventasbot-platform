@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import select
 
 from .auth import hash_password
@@ -16,6 +17,13 @@ def main() -> None:
     password = os.getenv("SUPERADMIN_PASSWORD", "")
     if len(password) < 8 or password == "cambiar-esta-clave":
         raise SystemExit("Definí SUPERADMIN_PASSWORD con al menos 8 caracteres y sin usar el placeholder")
+    try:
+        # El login valida el correo con EmailStr. Si acá se cuela un dominio que
+        # ese validador rechaza (.local, .test), queda un superadmin que no
+        # puede entrar nunca — mejor enterarse ahora.
+        validate_email(email, check_deliverability=False)
+    except EmailNotValidError as exc:
+        raise SystemExit(f"SUPERADMIN_EMAIL no es un correo válido para el login: {exc}") from exc
     create_schema()
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.tenant_id.is_(None), User.email == email))

@@ -1,0 +1,49 @@
+name: CI
+
+# Las reglas de .clinerules (tests + bandit + pip-audit antes de cerrar una
+# tarea) dependían de que la persona o el agente se acordaran. Acá se corren
+# solas en cada push y PR.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    env:
+      # Valores de juguete: la app se niega a arrancar sin estos, y ninguno
+      # tiene nada que ver con los secretos reales de producción.
+      VERIFY_TOKEN: token-de-ci
+      APP_SECRET: secreto-de-ci
+      JWT_SECRET: secreto-de-ci-suficientemente-largo-para-hs256
+      ENCRYPTION_KEY: SDvJmpNI3rjbtwTVUeMKPPHf5MpRxAQg8AI2FrIILds=
+      DATABASE_URL: sqlite:///./ci.db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Las migraciones levantan una base desde cero
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+
+      - name: Bandit (falla solo con medium o high)
+        run: python -m bandit -r app -q --severity-level medium
+
+      - name: pip-audit
+        run: python -m pip_audit

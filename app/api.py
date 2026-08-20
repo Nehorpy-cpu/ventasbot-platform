@@ -221,26 +221,43 @@ def order_list(tenant_id: str, actor: User = Depends(current_user), db: Session 
     return db.scalars(consulta.order_by(Order.created_at.desc()).offset(desde).limit(limite)).all()
 
 
+def avisar_si_cambio(tareas: BackgroundTasks, order_id: str, antes: OrderStatus, ahora: OrderStatus) -> None:
+    """Encola el aviso al cliente si el pedido efectivamente se movió.
+
+    Vive acá y no dentro del servicio porque el aviso sale recién cuando la
+    transacción ya se commiteó: si el aviso se mandara antes y el commit
+    fallara, el cliente recibiría el WhatsApp de un cambio que no ocurrió.
+    """
+    if antes != ahora:
+        tareas.add_task(avisar_cambio_de_estado, order_id, ahora, cfg.graph_version)
+
+
 @router.post("/tenants/{tenant_id}/orders/{order_id}/status", response_model=OrderOutput)
 def order_status(tenant_id: str, order_id: str, payload: StatusChange, tareas: BackgroundTasks,
                  actor: User = Depends(current_user), db: Session = Depends(get_db)):
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER, Role.WAREHOUSE, Role.DISPATCHER})
-    pedido = change_order_status(db, get_order(db, tenant_id, order_id), payload.status, actor)
-    # El aviso al cliente va después de guardar y en background: si Meta no
-    # contesta, el pedido igual ya cambió de estado.
-    tareas.add_task(avisar_cambio_de_estado, pedido.id, payload.status, cfg.graph_version)
+    pedido = get_order(db, tenant_id, order_id)
+    antes = pedido.status
+    pedido = change_order_status(db, pedido, payload.status, actor)
+    avisar_si_cambio(tareas, pedido.id, antes, pedido.status)
     return pedido
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/payments", response_model=PaymentOutput, status_code=201)
-def payment_create(tenant_id: str, order_id: str, payload: PaymentCreate,
+def payment_create(tenant_id: str, order_id: str, payload: PaymentCreate, tareas: BackgroundTasks,
                    actor: User = Depends(current_user), db: Session = Depends(get_db)):
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.SELLER})
-    return register_payment(db, get_order(db, tenant_id, order_id), payload, actor)
+    pedido = get_order(db, tenant_id, order_id)
+    antes = pedido.status
+    pago = register_payment(db, pedido, payload, actor)
+    # Cobrar el total confirma el pedido: el cliente tiene que enterarse igual
+    # que si lo hubiera confirmado un vendedor a mano.
+    avisar_si_cambio(tareas, pedido.id, antes, pedido.status)
+    return pago
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/delivery/assign", response_model=DeliveryOutput)
-def delivery_assign(tenant_id: str, order_id: str, payload: DeliveryAssign,
+def delivery_assign(tenant_id: str, order_id: str, payload: DeliveryAssign, tareas: BackgroundTasks,
                     actor: User = Depends(current_user), db: Session = Depends(get_db)):
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.DISPATCHER})
     order = get_order(db, tenant_id, order_id)
@@ -257,11 +274,12 @@ def delivery_assign(tenant_id: str, order_id: str, payload: DeliveryAssign,
           entity_id=delivery.id, details={"driver_id": driver.id})
     db.commit()
     db.refresh(delivery)
+    avisar_si_cambio(tareas, order.id, OrderStatus.READY, order.status)
     return delivery
 
 
 @router.post("/tenants/{tenant_id}/deliveries/{delivery_id}/status", response_model=DeliveryOutput)
-def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate,
+def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate, tareas: BackgroundTasks,
                     actor: User = Depends(current_user), db: Session = Depends(get_db)):
     assert_tenant_access(db, actor, tenant_id, {Role.TENANT_OWNER, Role.TENANT_MANAGER, Role.DISPATCHER, Role.DRIVER})
     delivery = db.scalar(select(Delivery).where(Delivery.id == delivery_id, Delivery.tenant_id == tenant_id))
@@ -279,6 +297,7 @@ def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate,
     if payload.proof_note is not None:
         delivery.proof_note = payload.proof_note
     order = get_order(db, tenant_id, delivery.order_id)
+    estado_previo = order.status
     mapped = DELIVERY_TO_ORDER.get(payload.status)
     if mapped:
         order.status = mapped
@@ -286,6 +305,7 @@ def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate,
           entity_id=delivery.id, details={"status": payload.status.value})
     db.commit()
     db.refresh(delivery)
+    avisar_si_cambio(tareas, order.id, estado_previo, order.status)
     return delivery
 
 

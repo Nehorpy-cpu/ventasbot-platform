@@ -12,3 +12,6 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
+
+# Config local de Claude Code (launch.json sí se versiona).
+.claude/settings.local.json
