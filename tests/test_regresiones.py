@@ -12,7 +12,7 @@ from tests.test_mvp_platform import auth, create_tenant, platform  # noqa: F401
 
 
 def montar(client: TestClient, slug: str, correo: str):
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
     tenant = create_tenant(client, root, slug=slug, email=correo)
     owner = auth(client, correo, "owner-segura-123", slug)
     producto = client.post(f"/api/tenants/{tenant['id']}/products", headers=owner, json={
@@ -35,7 +35,7 @@ def stock_actual(client, tenant, owner) -> int:
 def test_cancelar_pedido_confirmado_repone_stock(platform):
     """Antes: confirmar descontaba stock y cancelar no lo devolvía nunca."""
     client, _ = platform
-    tenant, owner, producto = montar(client, "tienda-stock", "stock@demo.test")
+    tenant, owner, producto = montar(client, "tienda-stock", "stock@demo.com")
     pedido = crear_pedido(client, tenant, owner, producto, 4, "595981000001")
 
     ruta = f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/status"
@@ -49,7 +49,7 @@ def test_cancelar_pedido_confirmado_repone_stock(platform):
 def test_cancelar_pedido_sin_confirmar_no_infla_stock(platform):
     """El contrapeso: si el stock nunca se descontó, cancelar no debe sumarlo."""
     client, _ = platform
-    tenant, owner, producto = montar(client, "tienda-stock2", "stock2@demo.test")
+    tenant, owner, producto = montar(client, "tienda-stock2", "stock2@demo.com")
     pedido = crear_pedido(client, tenant, owner, producto, 3, "595981000002")
 
     ruta = f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/status"
@@ -60,7 +60,7 @@ def test_cancelar_pedido_sin_confirmar_no_infla_stock(platform):
 def test_pagos_parciales_no_superan_el_total(platform):
     """Antes: dos pagos de 800 entraban en un pedido de 1000 (se cobraba 1600)."""
     client, _ = platform
-    tenant, owner, producto = montar(client, "tienda-pagos", "pagos@demo.test")
+    tenant, owner, producto = montar(client, "tienda-pagos", "pagos@demo.com")
     pedido = crear_pedido(client, tenant, owner, producto, 1, "595981000003")
     assert pedido["total"] == 1000
     ruta = f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/payments"
@@ -78,7 +78,7 @@ def test_pagos_parciales_no_superan_el_total(platform):
 def test_dos_pagos_parciales_exactos_confirman_el_pedido(platform):
     """600 + 400 sobre un pedido de 1000 sí lo confirma."""
     client, _ = platform
-    tenant, owner, producto = montar(client, "tienda-pagos2", "pagos2@demo.test")
+    tenant, owner, producto = montar(client, "tienda-pagos2", "pagos2@demo.com")
     pedido = crear_pedido(client, tenant, owner, producto, 1, "595981000004")
     ruta = f"/api/tenants/{tenant['id']}/orders/{pedido['id']}/payments"
 
@@ -95,9 +95,9 @@ def test_dos_pagos_parciales_exactos_confirman_el_pedido(platform):
 def test_actualizar_delivery_sin_coordenadas_no_borra_la_ubicacion(platform):
     """Antes: mandar solo el estado ponía lat/long en NULL y se perdía el rastro."""
     client, _ = platform
-    tenant, owner, producto = montar(client, "tienda-envios", "envios@demo.test")
+    tenant, owner, producto = montar(client, "tienda-envios", "envios@demo.com")
     chofer = client.post(f"/api/tenants/{tenant['id']}/users", headers=owner, json={
-        "email": "chofer@demo.test", "name": "Chofer", "password": "chofer-segura-1", "role": "DRIVER",
+        "email": "chofer@demo.com", "name": "Chofer", "password": "chofer-segura-1", "role": "DRIVER",
     }).json()
     pedido = crear_pedido(client, tenant, owner, producto, 1, "595981000005")
     for estado in ("CONFIRMED", "PREPARING", "READY"):
@@ -123,7 +123,7 @@ def test_login_bloquea_tras_demasiados_intentos(platform):
     _intentos.clear()
     codigos = [
         client.post("/api/auth/login", json={
-            "email": "root@ventasbot.test", "password": f"mala-{i}"}).status_code
+            "email": "root@ventasbot.com", "password": f"mala-{i}"}).status_code
         for i in range(12)
     ]
     assert 429 in codigos, "debería frenar antes del intento 12"
@@ -135,11 +135,11 @@ def test_token_de_rol_viejo_queda_invalido(platform):
     from app.models import Role, User
 
     client, Sesion = platform
-    tenant, owner, _ = montar(client, "tienda-roles", "roles@demo.test")
+    tenant, owner, _ = montar(client, "tienda-roles", "roles@demo.com")
     assert client.get("/api/me", headers=owner).status_code == 200
 
     with Sesion() as db:
-        usuario = db.query(User).filter(User.email == "roles@demo.test").one()
+        usuario = db.query(User).filter(User.email == "roles@demo.com").one()
         usuario.role = Role.SELLER
         db.commit()
 

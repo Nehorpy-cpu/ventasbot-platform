@@ -9,9 +9,8 @@ from app.mensajes import MensajeEntrante
 
 def _cfg() -> Config:
     return Config(
-        verify_token="v", app_secret="s", phone_number_id="p", access_token="a",
-        waba_id="w", graph_version="v21.0",
-        ollama_base_url="http://localhost:11434", ollama_model="qwen3.8:27b",
+        verify_token="v", app_secret="s", graph_version="v21.0",
+        ollama_base_url="http://localhost:11434", ollama_model="qwen3:8b",
     )
 
 
@@ -59,3 +58,39 @@ def test_generar_respuesta_cae_al_respaldo_si_ollama_falla(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **_: _ClienteFalso(excepcion=httpx.ConnectError("no anda")))
     resultado = asyncio.run(generar_respuesta(_cfg(), _mensaje("hola")))
     assert resultado == RESPUESTA_DE_RESPALDO
+
+
+# --- el prompt lleva el catálogo de la empresa -----------------------------
+
+def test_el_prompt_incluye_los_productos_de_la_empresa():
+    from app.ia import ContextoTenant, armar_prompt
+
+    prompt = armar_prompt(ContextoTenant(
+        nombre_empresa="Pizzería Central",
+        productos=[("Pizza muzzarella", 35000, 12), ("Empanada", 5000, 0)],
+    ))
+    assert "Pizzería Central" in prompt
+    assert "Pizza muzzarella" in prompt
+    assert "35.000 PYG" in prompt
+    assert "12 disponibles" in prompt
+    assert "SIN STOCK" in prompt          # la empanada no se ofrece como disponible
+    assert "No inventes precios" in prompt
+
+
+def test_sin_catalogo_cargado_el_prompt_lo_dice():
+    from app.ia import ContextoTenant, armar_prompt
+
+    prompt = armar_prompt(ContextoTenant(nombre_empresa="Empresa Nueva"))
+    assert "catálogo todavía no está cargado" in prompt
+
+
+def test_el_prompt_no_manda_un_catalogo_infinito():
+    from app.ia import MAX_PRODUCTOS_EN_PROMPT, ContextoTenant
+
+    contexto = ContextoTenant(
+        nombre_empresa="Mayorista",
+        productos=[(f"Producto {i}", 1000, 5) for i in range(MAX_PRODUCTOS_EN_PROMPT + 25)],
+    )
+    texto = contexto.catalogo_en_texto()
+    assert texto.count("\n") <= MAX_PRODUCTOS_EN_PROMPT + 1
+    assert "25 productos más" in texto

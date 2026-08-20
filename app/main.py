@@ -17,21 +17,35 @@ from fastapi import BackgroundTasks, FastAPI, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import cargar
-from .ia import generar_respuesta
-from .mensajes import MensajeEntrante, enviar_texto, extraer_mensajes
-from .security import firma_valida
-from sqlalchemy import text
+from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from .api import router as api_router
-from .database import create_schema, engine
+from .config import cargar
+from .database import SessionLocal, engine
+from .ia import ContextoTenant, generar_respuesta
+from .mensajes import MensajeEntrante, enviar_texto, extraer_mensajes
+from .models import Customer, Product, Tenant
+from .security import firma_valida
+from .whatsapp import credenciales_de_cuenta, cuenta_por_numero
 
 log = logging.getLogger("whatsapp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+# Tablas que tienen que existir sí o sí. El esquema lo maneja Alembic, no la
+# app: crear tablas al vuelo tapaba el hecho de que faltaba correr la migración.
+TABLAS_MINIMAS = {"tenants", "users", "whatsapp_accounts"}
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    create_schema()
+    faltantes = TABLAS_MINIMAS - set(inspect(engine).get_table_names())
+    if faltantes:
+        raise RuntimeError(
+            f"La base no está migrada (faltan: {', '.join(sorted(faltantes))}). "
+            "Corré: alembic upgrade head"
+        )
     yield
 
 
@@ -127,17 +141,76 @@ async def recibir(request: Request, tareas: BackgroundTasks) -> Response:
 
 
 async def procesar(mensaje: MensajeEntrante) -> None:
-    """Responde con el modelo local (Ollama). Ver app/ia.py."""
-    log.info("Mensaje de %s (%s): %r", mensaje.de, mensaje.tipo, mensaje.texto)
+    """Atiende un mensaje entrante con las credenciales de la empresa dueña.
+
+    El ruteo es por `phone_number_id`: es el número de la plataforma al que
+    llegó el mensaje, y cada empresa carga el suyo. Si nadie lo reclama, no se
+    contesta — usar las credenciales de otra empresa sería peor que el silencio.
+    """
+    log.info("Mensaje de %s para el numero %s (%s)", mensaje.de, mensaje.phone_number_id, mensaje.tipo)
+
+    with SessionLocal() as db:
+        cuenta = cuenta_por_numero(db, mensaje.phone_number_id)
+        if cuenta is None:
+            log.warning(
+                "Ninguna empresa activa tiene cargado el numero %s: mensaje descartado",
+                mensaje.phone_number_id,
+            )
+            return
+        tenant_id = cuenta.tenant_id
+        try:
+            credenciales = credenciales_de_cuenta(cuenta, cfg.graph_version)
+        except RuntimeError:
+            log.exception("No se pudieron leer las credenciales de la empresa %s", tenant_id)
+            return
+        contexto = contexto_de_tenant(db, tenant_id)
+        registrar_contacto(db, tenant_id, mensaje)
 
     if mensaje.tipo != "text":
         respuesta = "Por ahora solo entiendo texto."
     else:
-        respuesta = await generar_respuesta(cfg, mensaje)
+        respuesta = await generar_respuesta(cfg, mensaje, contexto)
 
     try:
-        await enviar_texto(cfg, mensaje.de, respuesta)
+        await enviar_texto(credenciales, mensaje.de, respuesta)
     except Exception:
         # No relanzar: ya se respondió 200 a Meta y un fallo acá no debe
         # provocar reintentos ni tumbar el proceso.
         log.exception("No se pudo responder a %s", mensaje.de)
+
+
+def contexto_de_tenant(db: Session, tenant_id: str) -> ContextoTenant | None:
+    """Catálogo y nombre de la empresa para que el modelo no invente."""
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        return None
+    productos = db.scalars(
+        select(Product)
+        .where(Product.tenant_id == tenant_id, Product.active.is_(True))
+        .order_by(Product.name)
+    ).all()
+    return ContextoTenant(
+        nombre_empresa=tenant.name,
+        moneda=tenant.currency,
+        productos=[(p.name, p.price, p.stock) for p in productos],
+    )
+
+
+def registrar_contacto(db: Session, tenant_id: str, mensaje: MensajeEntrante) -> None:
+    """Deja al que escribe fichado como cliente de esa empresa.
+
+    Si ya existía no se pisa el nombre cargado a mano por el vendedor con el
+    nombre de perfil de WhatsApp, que el cliente puede cambiar cuando quiera.
+    """
+    if not mensaje.de:
+        return
+    existe = db.scalar(select(Customer).where(
+        Customer.tenant_id == tenant_id, Customer.phone == mensaje.de))
+    if existe:
+        return
+    db.add(Customer(tenant_id=tenant_id, phone=mensaje.de, name=mensaje.nombre or ""))
+    try:
+        db.commit()
+    except IntegrityError:
+        # Dos mensajes del mismo número casi a la vez: el primero ya lo creó.
+        db.rollback()

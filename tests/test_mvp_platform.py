@@ -26,7 +26,7 @@ def platform():
     with TestingSession() as db:
         db.add(User(
             tenant_id=None,
-            email="root@ventasbot.test",
+            email="root@ventasbot.com",
             name="Root",
             password_hash=hash_password("super-segura-123"),
             role=Role.PLATFORM_ADMIN,
@@ -66,12 +66,12 @@ def create_tenant(client: TestClient, root_headers: dict[str, str], *, slug: str
 
 def test_superadmin_crea_tenant_y_owner_inicia_sesion(platform):
     client, _ = platform
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
-    tenant = create_tenant(client, root, slug="tienda-demo", email="owner@demo.test")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
+    tenant = create_tenant(client, root, slug="tienda-demo", email="owner@demo.com")
     assert tenant["status"] == "ACTIVE"
     assert tenant["is_demo"] is True
 
-    owner = auth(client, "owner@demo.test", "owner-segura-123", "tienda-demo")
+    owner = auth(client, "owner@demo.com", "owner-segura-123", "tienda-demo")
     me = client.get("/api/me", headers=owner)
     assert me.status_code == 200
     assert me.json()["tenant_id"] == tenant["id"]
@@ -88,13 +88,13 @@ def test_panel_web_se_sirve(platform):
 
 def test_login_empresarial_exige_slug(platform):
     client, _ = platform
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
-    create_tenant(client, root, slug="empresa-login", email="owner@login.test")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
+    create_tenant(client, root, slug="empresa-login", email="owner@login.com")
     without_slug = client.post("/api/auth/login", json={
-        "email": "owner@login.test", "password": "owner-segura-123"
+        "email": "owner@login.com", "password": "owner-segura-123"
     })
     with_slug = client.post("/api/auth/login", json={
-        "email": "owner@login.test", "password": "owner-segura-123", "tenant_slug": "empresa-login"
+        "email": "owner@login.com", "password": "owner-segura-123", "tenant_slug": "empresa-login"
     })
     assert without_slug.status_code == 401
     assert with_slug.status_code == 200
@@ -102,10 +102,10 @@ def test_login_empresarial_exige_slug(platform):
 
 def test_aislamiento_estricto_entre_empresas(platform):
     client, _ = platform
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
-    first = create_tenant(client, root, slug="empresa-uno", email="uno@test.local")
-    second = create_tenant(client, root, slug="empresa-dos", email="dos@test.local")
-    first_owner = auth(client, "uno@test.local", "owner-segura-123", "empresa-uno")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
+    first = create_tenant(client, root, slug="empresa-uno", email="uno@empresa-test.com")
+    second = create_tenant(client, root, slug="empresa-dos", email="dos@empresa-test.com")
+    first_owner = auth(client, "uno@empresa-test.com", "owner-segura-123", "empresa-uno")
 
     own = client.get(f"/api/tenants/{first['id']}/products", headers=first_owner)
     foreign = client.get(f"/api/tenants/{second['id']}/products", headers=first_owner)
@@ -115,9 +115,9 @@ def test_aislamiento_estricto_entre_empresas(platform):
 
 def test_venta_pago_stock_delivery_y_tracking(platform):
     client, SessionLocal = platform
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
-    tenant = create_tenant(client, root, slug="pizzeria-central", email="owner@pizza.test")
-    owner = auth(client, "owner@pizza.test", "owner-segura-123", "pizzeria-central")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
+    tenant = create_tenant(client, root, slug="pizzeria-central", email="owner@pizza.com")
+    owner = auth(client, "owner@pizza.com", "owner-segura-123", "pizzeria-central")
     tenant_id = tenant["id"]
 
     product_response = client.post(f"/api/tenants/{tenant_id}/products", headers=owner, json={
@@ -131,7 +131,7 @@ def test_venta_pago_stock_delivery_y_tracking(platform):
     product = product_response.json()
 
     driver_response = client.post(f"/api/tenants/{tenant_id}/users", headers=owner, json={
-        "email": "delivery@pizza.test",
+        "email": "delivery@pizza.com",
         "name": "Juan Delivery",
         "password": "delivery-segura-123",
         "role": "DRIVER",
@@ -193,7 +193,7 @@ def test_venta_pago_stock_delivery_y_tracking(platform):
     assert assign.status_code == 200, assign.text
     delivery = assign.json()
 
-    driver_headers = auth(client, "delivery@pizza.test", "delivery-segura-123", "pizzeria-central")
+    driver_headers = auth(client, "delivery@pizza.com", "delivery-segura-123", "pizzeria-central")
     for status in ("PICKED_UP", "IN_TRANSIT", "ARRIVED", "DELIVERED"):
         update = client.post(
             f"/api/tenants/{tenant_id}/deliveries/{delivery['id']}/status",
@@ -219,9 +219,9 @@ def test_venta_pago_stock_delivery_y_tracking(platform):
 
 def test_pago_idempotente_no_duplica(platform):
     client, _ = platform
-    root = auth(client, "root@ventasbot.test", "super-segura-123")
-    tenant = create_tenant(client, root, slug="tienda-idempotente", email="owner@idem.test")
-    owner = auth(client, "owner@idem.test", "owner-segura-123", "tienda-idempotente")
+    root = auth(client, "root@ventasbot.com", "super-segura-123")
+    tenant = create_tenant(client, root, slug="tienda-idempotente", email="owner@idem.com")
+    owner = auth(client, "owner@idem.com", "owner-segura-123", "tienda-idempotente")
     tenant_id = tenant["id"]
     product = client.post(f"/api/tenants/{tenant_id}/products", headers=owner, json={
         "sku": "SKU-1", "name": "Producto", "price": 10000, "stock": 5

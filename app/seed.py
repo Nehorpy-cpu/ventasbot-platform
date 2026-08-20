@@ -12,7 +12,7 @@ from .models import Role, User
 
 
 def main() -> None:
-    email = os.getenv("SUPERADMIN_EMAIL", "admin@ventasbot.local").strip().lower()
+    email = os.getenv("SUPERADMIN_EMAIL", "admin@ventasbot.com").strip().lower()
     password = os.getenv("SUPERADMIN_PASSWORD", "")
     if len(password) < 8 or password == "cambiar-esta-clave":
         raise SystemExit("Definí SUPERADMIN_PASSWORD con al menos 8 caracteres y sin usar el placeholder")

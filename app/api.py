@@ -19,6 +19,8 @@ from .auth import (
     require_platform_admin,
     verify_password,
 )
+from .config import cargar
+from .cripto import descifrar, enmascarar
 from .database import get_db
 from .models import (
     Delivery,
@@ -31,6 +33,7 @@ from .models import (
     Tenant,
     TenantStatus,
     User,
+    WhatsAppAccount,
 )
 from .schemas import (
     DeliveryAssign,
@@ -49,11 +52,25 @@ from .schemas import (
     TokenOutput,
     UserCreate,
     UserOutput,
+    WhatsAppAccountInput,
+    WhatsAppAccountOutput,
+    WhatsAppPruebaOutput,
 )
-from .services import DELIVERY_TO_ORDER, audit, change_order_status, create_order, create_tenant, ensure_delivery, register_payment
+from .mensajes import probar_credenciales
+from .services import (
+    DELIVERY_TO_ORDER,
+    audit,
+    change_order_status,
+    create_order,
+    create_tenant,
+    ensure_delivery,
+    register_payment,
+)
+from .whatsapp import credenciales_de_cuenta, cuenta_de_tenant, guardar_cuenta, marcar_verificada
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger("ventasbot.auth")
+cfg = cargar()
 
 # Fuerza bruta: ventana deslizante en memoria. Alcanza para un proceso único;
 # si mañana hay varios workers, esto se muda a Redis (ver README).
@@ -281,3 +298,75 @@ def public_tracking(tracking_token: str, db: Session = Depends(get_db)):
         "longitude": delivery.current_longitude,
         "updated_at": delivery.updated_at,
     }
+
+
+# --- Número de WhatsApp de cada empresa -------------------------------------
+
+def _salida_cuenta(cuenta: WhatsAppAccount) -> WhatsAppAccountOutput:
+    try:
+        enmascarado = enmascarar(descifrar(cuenta.access_token_cifrado))
+    except RuntimeError:
+        # La ENCRYPTION_KEY cambió: se avisa en el panel en vez de romper el GET.
+        enmascarado = "(ilegible: cambió ENCRYPTION_KEY)"
+    return WhatsAppAccountOutput(
+        tenant_id=cuenta.tenant_id,
+        phone_number_id=cuenta.phone_number_id,
+        display_phone_number=cuenta.display_phone_number,
+        waba_id=cuenta.waba_id,
+        active=cuenta.active,
+        token_cargado=bool(cuenta.access_token_cifrado),
+        token_enmascarado=enmascarado,
+        verificado_en=cuenta.verificado_en,
+    )
+
+
+ROLES_WHATSAPP = {Role.TENANT_OWNER, Role.TENANT_MANAGER}
+
+
+@router.get("/tenants/{tenant_id}/whatsapp", response_model=WhatsAppAccountOutput)
+def whatsapp_ver(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    assert_tenant_access(db, actor, tenant_id, ROLES_WHATSAPP)
+    cuenta = cuenta_de_tenant(db, tenant_id)
+    if not cuenta:
+        raise HTTPException(status_code=404, detail="La empresa todavía no cargó su número")
+    return _salida_cuenta(cuenta)
+
+
+@router.put("/tenants/{tenant_id}/whatsapp", response_model=WhatsAppAccountOutput)
+def whatsapp_guardar(tenant_id: str, payload: WhatsAppAccountInput,
+                     actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Alta o edición del número propio de la empresa.
+
+    El token se guarda cifrado y no vuelve nunca por la API.
+    """
+    assert_tenant_access(db, actor, tenant_id, ROLES_WHATSAPP)
+    cuenta = guardar_cuenta(db, tenant_id, payload)
+    audit(db, user=actor, tenant_id=tenant_id, action="whatsapp.guardado", entity_type="whatsapp_account",
+          entity_id=cuenta.id, details={"phone_number_id": cuenta.phone_number_id})
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ese número ya está cargado por otra empresa") from exc
+    db.refresh(cuenta)
+    return _salida_cuenta(cuenta)
+
+
+@router.post("/tenants/{tenant_id}/whatsapp/probar", response_model=WhatsAppPruebaOutput)
+async def whatsapp_probar(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Pregunta a Meta si el número y el token cargados funcionan.
+
+    Mejor que la empresa se entere acá y no cuando un cliente le escriba.
+    """
+    assert_tenant_access(db, actor, tenant_id, ROLES_WHATSAPP)
+    cuenta = cuenta_de_tenant(db, tenant_id)
+    if not cuenta:
+        raise HTTPException(status_code=404, detail="La empresa todavía no cargó su número")
+    ok, detalle = await probar_credenciales(credenciales_de_cuenta(cuenta, cfg.graph_version))
+    if ok:
+        marcar_verificada(cuenta, detalle)
+        audit(db, user=actor, tenant_id=tenant_id, action="whatsapp.verificado",
+              entity_type="whatsapp_account", entity_id=cuenta.id, details={})
+        db.commit()
+        return WhatsAppPruebaOutput(ok=True, detalle=f"Número verificado: {detalle or cuenta.phone_number_id}")
+    return WhatsAppPruebaOutput(ok=False, detalle=detalle)

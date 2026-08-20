@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from .models import DeliveryStatus, OrderStatus, PaymentStatus, Role, TenantStatus
 
@@ -12,7 +14,7 @@ class ORMModel(BaseModel):
 
 
 class LoginInput(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     tenant_slug: str | None = None
 
@@ -26,7 +28,7 @@ class TenantCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$")
     owner_name: str = Field(min_length=2, max_length=160)
-    owner_email: str
+    owner_email: EmailStr
     owner_password: str = Field(min_length=8)
     is_demo: bool = False
 
@@ -51,7 +53,7 @@ class UserOutput(ORMModel):
 
 
 class UserCreate(BaseModel):
-    email: str
+    email: EmailStr
     name: str = Field(min_length=2, max_length=160)
     password: str = Field(min_length=8)
     role: Role
@@ -175,3 +177,35 @@ class DeliveryOutput(ORMModel):
     current_latitude: str | None
     current_longitude: str | None
     proof_note: str | None
+
+
+class WhatsAppAccountInput(BaseModel):
+    """Lo que carga la empresa desde su panel.
+
+    `access_token` es opcional al editar: si viene vacío se conserva el que ya
+    estaba guardado, así se puede corregir el número sin volver a pegar el token.
+    """
+
+    phone_number_id: str = Field(min_length=5, max_length=64, pattern=r"^[0-9]+$")
+    access_token: str = Field(default="", max_length=1000)
+    display_phone_number: str = Field(default="", max_length=32)
+    waba_id: str | None = Field(default=None, max_length=64)
+    active: bool | None = None
+
+
+class WhatsAppAccountOutput(BaseModel):
+    """Nunca incluye el token: solo si está cargado y cómo termina."""
+
+    tenant_id: str
+    phone_number_id: str
+    display_phone_number: str
+    waba_id: str | None
+    active: bool
+    token_cargado: bool
+    token_enmascarado: str
+    verificado_en: datetime | None
+
+
+class WhatsAppPruebaOutput(BaseModel):
+    ok: bool
+    detalle: str

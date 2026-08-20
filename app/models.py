@@ -209,3 +209,29 @@ class AuditLog(Base):
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     details: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppAccount(Base):
+    """El número de WhatsApp que cada empresa carga como propio.
+
+    Una sola App de Meta (la de la plataforma) recibe todos los webhooks, por
+    eso APP_SECRET y VERIFY_TOKEN siguen siendo globales. Lo que cambia por
+    empresa es a qué número llegó el mensaje: Meta lo manda en
+    `value.metadata.phone_number_id`, y esa es la clave con la que se resuelve
+    el tenant. Por eso `phone_number_id` es único en toda la plataforma: dos
+    empresas no pueden reclamar el mismo número.
+    """
+
+    __tablename__ = "whatsapp_accounts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: new_id("wab"))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), unique=True, index=True)
+    phone_number_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    display_phone_number: Mapped[str] = mapped_column(String(32), default="")
+    waba_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Cifrado con app/cripto.py. Nunca se devuelve por la API.
+    access_token_cifrado: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    verificado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

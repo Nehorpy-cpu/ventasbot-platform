@@ -1,33 +1,75 @@
+"""Webhook: handshake, firma, parseo y ruteo multiempresa por número."""
+
 import json
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import main
+from app.cripto import cifrar
+from app.database import Base
 from app.mensajes import cuerpo_texto, extraer_mensajes
+from app.models import Product, Tenant, TenantStatus, WhatsAppAccount
 from app.security import firmar
 
 SECRETO = "secreto-de-prueba"
 VERIFY = "token-de-prueba"
 
+# Números de la plataforma: cada empresa carga el suyo. Meta los manda en
+# value.metadata.phone_number_id y con eso se resuelve de quién es el mensaje.
+PNID_PIZZERIA = "111111111111111"
+PNID_FARMACIA = "222222222222222"
+PNID_HUERFANO = "999999999999999"  # nadie lo cargó
+
 
 @pytest.fixture
 def cliente(monkeypatch):
-    """TestClient con el envío a Meta anulado (los background tasks corren de verdad)."""
+    """TestClient con base propia y el envío a Meta anulado.
+
+    `procesar` abre su propia sesión (corre en background, sin Depends), así
+    que no alcanza con dependency_overrides: hay que cambiarle el SessionLocal.
+    """
     enviados = []
 
-    async def falso_enviar(cfg, para, texto):
-        enviados.append((para, texto))
+    async def falso_enviar(credenciales, para, texto):
+        enviados.append((credenciales.phone_number_id, para, texto))
         return {"messages": [{"id": "wamid.fake"}]}
 
-    async def falsa_ia(cfg, mensaje):
-        return f"Recibí: {mensaje.texto}"
+    async def falsa_ia(cfg, mensaje, contexto=None):
+        empresa = contexto.nombre_empresa if contexto else "sin empresa"
+        return f"[{empresa}] Recibí: {mensaje.texto}"
 
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Sesion = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(engine)
+    with Sesion() as db:
+        pizzeria = Tenant(name="Pizzería Central", slug="pizzeria-central", status=TenantStatus.ACTIVE)
+        farmacia = Tenant(name="Farmacia Norte", slug="farmacia-norte", status=TenantStatus.ACTIVE)
+        db.add_all([pizzeria, farmacia])
+        db.flush()
+        db.add_all([
+            WhatsAppAccount(tenant_id=pizzeria.id, phone_number_id=PNID_PIZZERIA,
+                            access_token_cifrado=cifrar("TOKEN-PIZZERIA")),
+            WhatsAppAccount(tenant_id=farmacia.id, phone_number_id=PNID_FARMACIA,
+                            access_token_cifrado=cifrar("TOKEN-FARMACIA")),
+            Product(tenant_id=pizzeria.id, sku="MUZZA", name="Pizza muzzarella", price=35000, stock=12),
+        ])
+        db.commit()
+        ids = {"pizzeria": pizzeria.id, "farmacia": farmacia.id}
+
+    monkeypatch.setattr(main, "SessionLocal", Sesion)
     monkeypatch.setattr(main, "enviar_texto", falso_enviar)
     monkeypatch.setattr(main, "generar_respuesta", falsa_ia)
+    main._ids_procesados.clear()
     with TestClient(main.app) as c:
         c.enviados = enviados
+        c.sesion = Sesion
+        c.tenants = ids
         yield c
+    main._ids_procesados.clear()
 
 
 def post_firmado(cliente, payload: dict, secreto: str = SECRETO):
@@ -42,32 +84,41 @@ def post_firmado(cliente, payload: dict, secreto: str = SECRETO):
     )
 
 
-PAYLOAD_TEXTO = {
-    "object": "whatsapp_business_account",
-    "entry": [
-        {
-            "id": "WABA_ID",
-            "changes": [
-                {
-                    "field": "messages",
-                    "value": {
-                        "messaging_product": "whatsapp",
-                        "contacts": [{"wa_id": "595981123456", "profile": {"name": "Ana"}}],
-                        "messages": [
-                            {
-                                "id": "wamid.ABC",
-                                "from": "595981123456",
-                                "timestamp": "1754900000",
-                                "type": "text",
-                                "text": {"body": "hola bot"},
-                            }
-                        ],
-                    },
-                }
-            ],
-        }
-    ],
-}
+def payload_texto(phone_number_id: str = PNID_PIZZERIA, texto: str = "hola bot",
+                  wamid: str = "wamid.ABC", de: str = "595981123456") -> dict:
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "WABA_ID",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "metadata": {
+                                "display_phone_number": "595981000000",
+                                "phone_number_id": phone_number_id,
+                            },
+                            "contacts": [{"wa_id": de, "profile": {"name": "Ana"}}],
+                            "messages": [
+                                {
+                                    "id": wamid,
+                                    "from": de,
+                                    "timestamp": "1754900000",
+                                    "type": "text",
+                                    "text": {"body": texto},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+PAYLOAD_TEXTO = payload_texto()
 
 PAYLOAD_STATUS = {
     "object": "whatsapp_business_account",
@@ -79,6 +130,7 @@ PAYLOAD_STATUS = {
                     "field": "messages",
                     "value": {
                         "messaging_product": "whatsapp",
+                        "metadata": {"phone_number_id": PNID_PIZZERIA},
                         "statuses": [
                             {"id": "wamid.XYZ", "status": "delivered", "recipient_id": "595981123456"}
                         ],
@@ -123,7 +175,8 @@ def test_handshake_sin_modo_subscribe_da_403(cliente):
 def test_post_con_firma_valida_acepta_y_responde(cliente):
     r = post_firmado(cliente, PAYLOAD_TEXTO)
     assert r.status_code == 200
-    assert cliente.enviados == [("595981123456", "Recibí: hola bot")]
+    # Responde con el número de la pizzería, no con uno global.
+    assert cliente.enviados == [(PNID_PIZZERIA, "595981123456", "[Pizzería Central] Recibí: hola bot")]
 
 
 def test_post_con_firma_invalida_da_403_y_no_procesa(cliente):
@@ -231,3 +284,70 @@ def test_recuerda_una_cantidad_acotada_de_ids(cliente):
         main.ya_procesado(f"wamid.{i}")
     assert len(main._ids_procesados) <= main.MAX_IDS_RECORDADOS
     main._ids_procesados.clear()
+
+
+# --- ruteo multiempresa ----------------------------------------------------
+
+def test_cada_empresa_responde_con_su_propio_numero(cliente):
+    """El mismo webhook atiende a las dos empresas, cada una con su token."""
+    post_firmado(cliente, payload_texto(PNID_PIZZERIA, "quiero una muzza", "wamid.P1"))
+    post_firmado(cliente, payload_texto(PNID_FARMACIA, "tenés ibuprofeno?", "wamid.F1"))
+
+    numeros = [pnid for pnid, _para, _texto in cliente.enviados]
+    assert numeros == [PNID_PIZZERIA, PNID_FARMACIA]
+    assert "Pizzería Central" in cliente.enviados[0][2]
+    assert "Farmacia Norte" in cliente.enviados[1][2]
+
+
+def test_numero_que_ninguna_empresa_cargo_no_recibe_respuesta(cliente):
+    """Contestar con las credenciales de otra empresa sería peor que el silencio."""
+    r = post_firmado(cliente, payload_texto(PNID_HUERFANO, "hola", "wamid.H1"))
+    assert r.status_code == 200
+    assert cliente.enviados == []
+
+
+def test_empresa_suspendida_no_contesta(cliente):
+    from app.models import Tenant, TenantStatus
+
+    with cliente.sesion() as db:
+        tenant = db.get(Tenant, cliente.tenants["pizzeria"])
+        tenant.status = TenantStatus.SUSPENDED
+        db.commit()
+
+    post_firmado(cliente, payload_texto(PNID_PIZZERIA, "hola", "wamid.S1"))
+    assert cliente.enviados == []
+
+
+def test_cuenta_desactivada_no_contesta(cliente):
+    from sqlalchemy import select
+
+    from app.models import WhatsAppAccount
+
+    with cliente.sesion() as db:
+        cuenta = db.scalar(select(WhatsAppAccount).where(
+            WhatsAppAccount.phone_number_id == PNID_PIZZERIA))
+        cuenta.active = False
+        db.commit()
+
+    post_firmado(cliente, payload_texto(PNID_PIZZERIA, "hola", "wamid.D1"))
+    assert cliente.enviados == []
+
+
+def test_el_que_escribe_queda_fichado_como_cliente_de_esa_empresa(cliente):
+    """Un número que escribe por primera vez se guarda como Customer del tenant."""
+    from sqlalchemy import select
+
+    from app.models import Customer
+
+    post_firmado(cliente, payload_texto(PNID_PIZZERIA, "hola", "wamid.C1", de="595971555444"))
+
+    with cliente.sesion() as db:
+        cliente_nuevo = db.scalar(select(Customer).where(Customer.phone == "595971555444"))
+        assert cliente_nuevo is not None
+        assert cliente_nuevo.tenant_id == cliente.tenants["pizzeria"]
+        assert cliente_nuevo.name == "Ana"
+
+
+def test_el_mensaje_lleva_a_que_numero_llego():
+    (m,) = extraer_mensajes(payload_texto(PNID_FARMACIA))
+    assert m.phone_number_id == PNID_FARMACIA
