@@ -26,8 +26,10 @@ variables faltan.
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-17 tests: handshake, validación de firma, parseo del payload y normalización del
-número. Para probar contra un servidor levantado de verdad:
+35 tests: handshake, validación de firma, parseo del payload, normalización del
+número, y las regresiones de negocio en `tests/test_regresiones.py` (stock,
+pagos parciales, ubicación del delivery, fuerza bruta en el login). Para probar
+contra un servidor levantado de verdad:
 
 ```bash
 .venv\Scripts\python.exe smoke.py http://127.0.0.1:8099
@@ -39,7 +41,7 @@ número. Para probar contra un servidor levantado de verdad:
 |---|---|
 | `GET /webhook` | Handshake de Meta: devuelve `hub.challenge` en texto plano si el `hub.verify_token` coincide. |
 | `POST /webhook` | Valida `X-Hub-Signature-256`, encola el procesamiento y responde 200 al toque. |
-| `GET /salud` | Reporta qué variables de entorno faltan. |
+| `GET /salud` | Reporta qué variables de entorno faltan y si la base responde. |
 
 La lógica del bot está en `procesar()` en [app/main.py](app/main.py) — hoy es un eco.
 Ahí se enchufa la IA o lo que corresponda.
@@ -58,6 +60,25 @@ Ahí se enchufa la IA o lo que corresponda.
   reintentos duplican mensajes.
 - `enviar_texto` solo sirve dentro de la ventana de 24 h. Fuera de ella, plantilla
   aprobada.
+- Los reintentos de Meta repiten el mismo `message.id`. El webhook lleva un
+  registro acotado de ids ya atendidos (`ya_procesado` en `app/main.py`) para no
+  contestar dos veces. **Ese registro vive en memoria del proceso**: con más de
+  un worker hay que moverlo a Redis o a una tabla.
+
+## Invariantes del negocio (no romper sin test)
+
+- El stock se descuenta al pasar a `CONFIRMED` y se repone si el pedido se
+  cancela desde cualquier estado posterior. Las filas se leen con
+  `with_for_update()`: en PostgreSQL eso es lo que evita vender dos veces la
+  misma unidad.
+- La suma de pagos `PENDING` + `APPROVED` de un pedido nunca puede superar su
+  total. El pedido se confirma solo cuando lo **aprobado** cubre el total.
+- `JWT_SECRET` es obligatorio (≥32 caracteres, distinto del placeholder). No hay
+  default: la app prefiere fallar a quedar firmando tokens con un secreto público.
+- El token trae rol y empresa, pero manda la base: si a alguien lo cambian de rol
+  o de empresa, su token anterior deja de valer.
+- El login frena a los 10 intentos fallidos en 5 minutos por empresa+correo. Ese
+  contador también es en memoria del proceso.
 
 ## Desplegar
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -157,25 +157,93 @@ ALLOWED_ORDER_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.CANCELLED: set(),
 }
 
+# Estados en los que el stock del pedido YA se descontó del catálogo. Si un
+# pedido en cualquiera de estos se cancela, hay que devolver las unidades.
+ESTADOS_CON_STOCK_DESCONTADO = {
+    OrderStatus.CONFIRMED,
+    OrderStatus.PREPARING,
+    OrderStatus.READY,
+    OrderStatus.ASSIGNED,
+    OrderStatus.IN_TRANSIT,
+}
 
-def change_order_status(db: Session, order: Order, target: OrderStatus, actor: User) -> Order:
+
+def _productos_del_pedido(db: Session, order: Order) -> dict[str, Product]:
+    """Trae los productos del pedido bloqueando la fila.
+
+    with_for_update() evita que dos confirmaciones simultáneas lean el mismo
+    stock y lo descuenten dos veces. En SQLite el dialecto lo ignora (no hay
+    concurrencia real); en PostgreSQL es lo que sostiene la invariante.
+    """
+    ids = {item.product_id for item in order.items}
+    if not ids:
+        return {}
+    filas = db.scalars(select(Product).where(Product.id.in_(ids)).with_for_update()).all()
+    return {p.id: p for p in filas}
+
+
+def _descontar_stock(db: Session, order: Order) -> None:
+    productos = _productos_del_pedido(db, order)
+    for item in order.items:
+        producto = productos.get(item.product_id)
+        if not producto or producto.tenant_id != order.tenant_id or producto.stock < item.quantity:
+            raise HTTPException(status_code=409, detail=f"Stock cambió para {item.product_name}")
+    for item in order.items:
+        productos[item.product_id].stock -= item.quantity
+
+
+def _reponer_stock(db: Session, order: Order) -> None:
+    productos = _productos_del_pedido(db, order)
+    for item in order.items:
+        producto = productos.get(item.product_id)
+        if producto and producto.tenant_id == order.tenant_id:
+            producto.stock += item.quantity
+
+
+def aplicar_transicion(db: Session, order: Order, target: OrderStatus, actor: User) -> None:
+    """Valida la transición y mueve el stock, SIN commitear.
+
+    Separado de change_order_status para que quien ya está dentro de una
+    transacción (por ejemplo register_payment) no dispare un commit a la
+    mitad y deje el resto de su trabajo sin guardar.
+    """
     if target not in ALLOWED_ORDER_TRANSITIONS[order.status]:
         raise HTTPException(status_code=409, detail=f"Transición inválida: {order.status.value} → {target.value}")
     previous = order.status
     if target == OrderStatus.CONFIRMED:
-        for item in order.items:
-            product = db.get(Product, item.product_id)
-            if not product or product.tenant_id != order.tenant_id or product.stock < item.quantity:
-                raise HTTPException(status_code=409, detail=f"Stock cambió para {item.product_name}")
-        for item in order.items:
-            db.get(Product, item.product_id).stock -= item.quantity
+        _descontar_stock(db, order)
+    elif target == OrderStatus.CANCELLED and previous in ESTADOS_CON_STOCK_DESCONTADO:
+        _reponer_stock(db, order)
     order.status = target
     audit(db, user=actor, tenant_id=order.tenant_id, action="order.status_changed",
           entity_type="order", entity_id=order.id,
           details={"from": previous.value, "to": target.value})
+
+
+def change_order_status(db: Session, order: Order, target: OrderStatus, actor: User) -> Order:
+    aplicar_transicion(db, order, target, actor)
     db.commit()
     db.refresh(order)
     return order
+
+
+# Un pago RECHAZADO o DEVUELTO no ocupa saldo del pedido.
+ESTADOS_DE_PAGO_QUE_SUMAN = {PaymentStatus.PENDING, PaymentStatus.APPROVED}
+
+
+def _suma_pagos(db: Session, order: Order, estados: set[PaymentStatus]) -> int:
+    total = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.order_id == order.id,
+            Payment.status.in_(estados),
+        )
+    )
+    return int(total or 0)
+
+
+def saldo_pendiente(db: Session, order: Order) -> int:
+    """Cuánto falta cobrar del pedido, contando pagos pendientes y aprobados."""
+    return order.total - _suma_pagos(db, order, ESTADOS_DE_PAGO_QUE_SUMAN)
 
 
 def register_payment(db: Session, order: Order, payload, actor: User) -> Payment:
@@ -184,13 +252,22 @@ def register_payment(db: Session, order: Order, payload, actor: User) -> Payment
         if existing.order_id != order.id or existing.amount != payload.amount:
             raise HTTPException(status_code=409, detail="Clave de idempotencia reutilizada con otros datos")
         return existing
-    if payload.amount > order.total:
-        raise HTTPException(status_code=400, detail="Pago superior al total del pedido")
+
+    # Mirar solo el pago actual dejaba pasar cobros parciales que sumados
+    # superaban el total del pedido (dos de 800 sobre un pedido de 1000).
+    saldo = saldo_pendiente(db, order)
+    if payload.amount > saldo:
+        raise HTTPException(status_code=400, detail=f"El pago excede el saldo del pedido (saldo: {saldo})")
+
     payment = Payment(tenant_id=order.tenant_id, order_id=order.id, **payload.model_dump())
     db.add(payment)
-    if payload.status == PaymentStatus.APPROVED and payload.amount == order.total:
-        if order.status in {OrderStatus.PENDING_CONFIRMATION, OrderStatus.PENDING_PAYMENT}:
-            change_order_status(db, order, OrderStatus.CONFIRMED, actor)
+    # Se confirma solo cuando lo efectivamente APROBADO cubre el total: un
+    # pago PENDING no alcanza, y dos parciales aprobados sí.
+    aprobado = _suma_pagos(db, order, {PaymentStatus.APPROVED})
+    if payload.status == PaymentStatus.APPROVED:
+        aprobado += payload.amount
+    if aprobado >= order.total and order.status in {OrderStatus.PENDING_CONFIRMATION, OrderStatus.PENDING_PAYMENT}:
+        aplicar_transicion(db, order, OrderStatus.CONFIRMED, actor)
     audit(db, user=actor, tenant_id=order.tenant_id, action="payment.registered",
           entity_type="payment", entity_id=payment.id,
           details={"provider": payload.provider, "status": payload.status.value})

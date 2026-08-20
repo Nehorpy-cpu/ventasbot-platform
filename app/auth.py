@@ -19,6 +19,28 @@ from .models import Role, Tenant, TenantStatus, User
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
+# Valores de ejemplo que nunca deben terminar firmando tokens de verdad.
+_SECRETOS_PROHIBIDOS = {
+    "cambiar-por-un-secreto-aleatorio-de-al-menos-32-caracteres",
+    "dev-only-change-this-secret-before-production",
+}
+
+
+def jwt_secret() -> str:
+    """Secreto de firma. Explota al arrancar si no está bien configurado.
+
+    Antes había un default hardcodeado: si JWT_SECRET faltaba en producción,
+    cualquiera que leyera el repo podía firmarse un token de PLATFORM_ADMIN.
+    Preferimos que el login falle ruidosamente a que la app quede abierta.
+    """
+    secreto = os.getenv("JWT_SECRET", "").strip()
+    if len(secreto) < 32 or secreto in _SECRETOS_PROHIBIDOS:
+        raise RuntimeError(
+            "JWT_SECRET sin configurar: definí un valor aleatorio de al menos "
+            "32 caracteres en .env (no el placeholder de .env.example)."
+        )
+    return secreto
+
 
 def hash_password(password: str) -> str:
     return password_hash.hash(password)
@@ -29,7 +51,6 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_token(user: User) -> str:
-    secret = os.getenv("JWT_SECRET", "dev-only-change-this-secret-before-production")
     minutes = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
     now = datetime.now(timezone.utc)
     payload = {
@@ -39,19 +60,28 @@ def create_token(user: User) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
     }
-    return jwt.encode(payload, secret, algorithm="HS256")
+    return jwt.encode(payload, jwt_secret(), algorithm="HS256")
 
 
 def current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    secret = os.getenv("JWT_SECRET", "dev-only-change-this-secret-before-production")
     try:
-        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            jwt_secret(),
+            algorithms=["HS256"],
+            # Sin `require` un token sin `exp` se aceptaría para siempre.
+            options={"require": ["exp", "sub"]},
+        )
         user_id = payload.get("sub")
     except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido") from exc
     user = db.get(User, user_id)
     if not user or not user.active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inactivo")
+    # El rol viaja en el token pero manda la base: si a alguien lo degradaron o
+    # lo movieron de empresa, su token viejo no debe conservar los permisos.
+    if payload.get("role") != user.role.value or payload.get("tenant_id") != user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token desactualizado")
     return user
 
 

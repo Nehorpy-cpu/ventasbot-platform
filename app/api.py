@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -16,7 +20,18 @@ from .auth import (
     verify_password,
 )
 from .database import get_db
-from .models import Delivery, DeliveryStatus, Order, OrderStatus, Payment, Product, Role, Tenant, User
+from .models import (
+    Delivery,
+    DeliveryStatus,
+    Order,
+    OrderStatus,
+    Payment,
+    Product,
+    Role,
+    Tenant,
+    TenantStatus,
+    User,
+)
 from .schemas import (
     DeliveryAssign,
     DeliveryOutput,
@@ -38,22 +53,60 @@ from .schemas import (
 from .services import DELIVERY_TO_ORDER, audit, change_order_status, create_order, create_tenant, ensure_delivery, register_payment
 
 router = APIRouter(prefix="/api")
+log = logging.getLogger("ventasbot.auth")
+
+# Fuerza bruta: ventana deslizante en memoria. Alcanza para un proceso único;
+# si mañana hay varios workers, esto se muda a Redis (ver README).
+MAX_INTENTOS = 10
+VENTANA_INTENTOS = timedelta(minutes=5)
+_intentos: dict[str, list[datetime]] = defaultdict(list)
+
+# Hash señuelo: verificarlo cuando el email no existe hace que la respuesta
+# tarde lo mismo que con un email real, así no se puede enumerar usuarios
+# midiendo el tiempo de respuesta.
+_HASH_SEÑUELO = hash_password("señuelo-para-igualar-tiempos")
+
+
+def _clave_intentos(payload: LoginInput) -> str:
+    return f"{(payload.tenant_slug or '').strip().lower()}|{payload.email.strip().lower()}"
+
+
+def _registrar_fallo(clave: str) -> None:
+    _intentos[clave].append(datetime.now(timezone.utc))
+
+
+def _bloqueado(clave: str) -> bool:
+    corte = datetime.now(timezone.utc) - VENTANA_INTENTOS
+    recientes = [t for t in _intentos[clave] if t > corte]
+    _intentos[clave] = recientes
+    return len(recientes) >= MAX_INTENTOS
 
 
 @router.post("/auth/login", response_model=TokenOutput)
 def login(payload: LoginInput, db: Session = Depends(get_db)):
+    clave = _clave_intentos(payload)
+    if _bloqueado(clave):
+        log.warning("Login bloqueado por exceso de intentos: %s", clave)
+        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos, esperá unos minutos")
+
     query = select(User).where(User.email == payload.email.strip().lower(), User.active.is_(True))
+    tenant = None
     if payload.tenant_slug:
         tenant = db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
-        if not tenant:
-            raise HTTPException(status_code=401, detail="Credenciales inválidas")
-        query = query.where(User.tenant_id == tenant.id)
+        query = query.where(User.tenant_id == (tenant.id if tenant else "__inexistente__"))
     else:
         query = query.where(User.tenant_id.is_(None))
     candidates = db.scalars(query).all()
     user = next((item for item in candidates if verify_password(payload.password, item.password_hash)), None)
     if not user:
+        if not candidates:
+            verify_password(payload.password, _HASH_SEÑUELO)
+        _registrar_fallo(clave)
+        log.warning("Credenciales inválidas para %s", clave)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    if tenant and tenant.status == TenantStatus.SUSPENDED:
+        raise HTTPException(status_code=403, detail="Empresa suspendida")
+    _intentos.pop(clave, None)
     return TokenOutput(access_token=create_token(user))
 
 
@@ -101,9 +154,11 @@ def user_create(tenant_id: str, payload: UserCreate, actor: User = Depends(curre
 
 
 @router.get("/tenants/{tenant_id}/products", response_model=list[ProductOutput])
-def product_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+def product_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db),
+                 limite: int = Query(100, ge=1, le=500), desde: int = Query(0, ge=0)):
     assert_tenant_access(db, actor, tenant_id)
-    return db.scalars(select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)).all()
+    return db.scalars(select(Product).where(Product.tenant_id == tenant_id)
+                      .order_by(Product.name).offset(desde).limit(limite)).all()
 
 
 @router.post("/tenants/{tenant_id}/products", response_model=ProductOutput, status_code=201)
@@ -136,10 +191,14 @@ def get_order(db: Session, tenant_id: str, order_id: str) -> Order:
 
 
 @router.get("/tenants/{tenant_id}/orders", response_model=list[OrderOutput])
-def order_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db)):
+def order_list(tenant_id: str, actor: User = Depends(current_user), db: Session = Depends(get_db),
+               estado: OrderStatus | None = None,
+               limite: int = Query(100, ge=1, le=500), desde: int = Query(0, ge=0)):
     assert_tenant_access(db, actor, tenant_id)
-    return db.scalars(select(Order).options(selectinload(Order.items)).where(
-        Order.tenant_id == tenant_id).order_by(Order.created_at.desc())).all()
+    consulta = select(Order).options(selectinload(Order.items)).where(Order.tenant_id == tenant_id)
+    if estado:
+        consulta = consulta.where(Order.status == estado)
+    return db.scalars(consulta.order_by(Order.created_at.desc()).offset(desde).limit(limite)).all()
 
 
 @router.post("/tenants/{tenant_id}/orders/{order_id}/status", response_model=OrderOutput)
@@ -187,9 +246,14 @@ def delivery_update(tenant_id: str, delivery_id: str, payload: DeliveryUpdate,
     if actor.role == Role.DRIVER and delivery.driver_id != actor.id:
         raise HTTPException(status_code=403, detail="Entrega asignada a otro delivery")
     delivery.status = payload.status
-    delivery.current_latitude = payload.latitude
-    delivery.current_longitude = payload.longitude
-    delivery.proof_note = payload.proof_note
+    # Solo se pisa lo que vino: mandar el estado sin coordenadas no debe
+    # borrar la ultima posicion reportada por el repartidor.
+    if payload.latitude is not None:
+        delivery.current_latitude = payload.latitude
+    if payload.longitude is not None:
+        delivery.current_longitude = payload.longitude
+    if payload.proof_note is not None:
+        delivery.proof_note = payload.proof_note
     order = get_order(db, tenant_id, delivery.order_id)
     mapped = DELIVERY_TO_ORDER.get(payload.status)
     if mapped:
@@ -207,6 +271,8 @@ def public_tracking(tracking_token: str, db: Session = Depends(get_db)):
     if not delivery:
         raise HTTPException(status_code=404, detail="Tracking no encontrado")
     order = db.get(Order, delivery.order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Tracking no encontrado")
     return {
         "order_id": order.id,
         "order_status": order.status.value,

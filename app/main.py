@@ -7,7 +7,9 @@ GET  /salud    -> chequeo de configuración
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,8 +21,10 @@ from .config import cargar
 from .ia import generar_respuesta
 from .mensajes import MensajeEntrante, enviar_texto, extraer_mensajes
 from .security import firma_valida
+from sqlalchemy import text
+
 from .api import router as api_router
-from .database import create_schema
+from .database import create_schema, engine
 
 log = logging.getLogger("whatsapp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,10 +43,40 @@ if static_dir.exists():
     app.mount("/panel", StaticFiles(directory=static_dir, html=True), name="panel")
 
 
+# Meta reintenta el mismo webhook si no le llega el 200 a tiempo, y el
+# reintento trae los mismos message.id. Sin esto el bot contesta dos veces.
+MAX_IDS_RECORDADOS = 5000
+_ids_procesados: OrderedDict[str, None] = OrderedDict()
+
+
+def ya_procesado(id_mensaje: str) -> bool:
+    """True si este message.id ya se atendió. Registra el id de paso."""
+    if not id_mensaje:
+        return False
+    if id_mensaje in _ids_procesados:
+        return True
+    _ids_procesados[id_mensaje] = None
+    while len(_ids_procesados) > MAX_IDS_RECORDADOS:
+        _ids_procesados.popitem(last=False)
+    return False
+
+
 @app.get("/salud")
 def salud() -> dict[str, object]:
     faltan = cfg.faltantes()
-    return {"ok": not faltan, "faltan": faltan, "graph": cfg.graph_version}
+    try:
+        with engine.connect() as conexion:
+            conexion.execute(text("SELECT 1"))
+        base_ok = True
+    except Exception:
+        log.exception("La base de datos no responde")
+        base_ok = False
+    return {
+        "ok": not faltan and base_ok,
+        "faltan": faltan,
+        "base_datos": "ok" if base_ok else "sin conexión",
+        "graph": cfg.graph_version,
+    }
 
 
 @app.get("/webhook", response_class=PlainTextResponse)
@@ -75,8 +109,18 @@ async def recibir(request: Request, tareas: BackgroundTasks) -> Response:
         log.warning("Firma inválida: petición descartada")
         return Response(status_code=403)
 
-    payload = await request.json()
+    try:
+        payload = json.loads(crudo)
+    except ValueError:
+        # Firma válida pero cuerpo ilegible: se avisa y se corta acá. Devolver
+        # 200 igual, porque reintentar no va a arreglar un JSON roto.
+        log.warning("Cuerpo del webhook no es JSON válido")
+        return Response(status_code=200)
+
     for mensaje in extraer_mensajes(payload):
+        if ya_procesado(mensaje.id):
+            log.info("Mensaje %s repetido (reintento de Meta): se ignora", mensaje.id)
+            continue
         tareas.add_task(procesar, mensaje)
 
     return Response(status_code=200)

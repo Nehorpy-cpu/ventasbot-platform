@@ -196,3 +196,38 @@ def test_el_cuerpo_lleva_messaging_product():
 
 def test_salud_reporta_ok_con_la_config_completa(cliente):
     assert cliente.get("/salud").json()["ok"] is True
+
+
+def test_reintento_de_meta_no_duplica_la_respuesta(cliente):
+    """Meta reenvía el mismo message.id si no le llegó el 200: no contestar dos veces."""
+    main._ids_procesados.clear()
+
+    assert post_firmado(cliente, PAYLOAD_TEXTO).status_code == 200
+    assert len(cliente.enviados) == 1
+
+    assert post_firmado(cliente, PAYLOAD_TEXTO).status_code == 200
+    assert len(cliente.enviados) == 1, "el reintento generó una segunda respuesta"
+
+    main._ids_procesados.clear()
+
+
+def test_cuerpo_ilegible_no_tumba_el_webhook(cliente):
+    """Firma válida sobre bytes que no son JSON: se descarta con 200, sin 500."""
+    main._ids_procesados.clear()
+    crudo = b"{esto no es json"
+    respuesta = cliente.post(
+        "/webhook",
+        content=crudo,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": firmar(crudo, SECRETO)},
+    )
+    assert respuesta.status_code == 200
+    assert cliente.enviados == []
+
+
+def test_recuerda_una_cantidad_acotada_de_ids(cliente):
+    """El registro anti-duplicados no puede crecer para siempre en memoria."""
+    main._ids_procesados.clear()
+    for i in range(main.MAX_IDS_RECORDADOS + 50):
+        main.ya_procesado(f"wamid.{i}")
+    assert len(main._ids_procesados) <= main.MAX_IDS_RECORDADOS
+    main._ids_procesados.clear()
